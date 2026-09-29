@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+*.db
+*.db-journal
+
+# Env files (never commit secrets)
+.env
+.env.local
+!.env.example
+
+# Node / Next.js (apps/web also has its own create-next-app .gitignore)
+node_modules/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

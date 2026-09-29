@@ -1,0 +1,255 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666666;
+  --border: #e2e2e2;
+  --surface: #f7f7f8;
+  --accent: #2451c4;
+  --pass: #1a7f37;
+  --fail: #c4342b;
+  --error: #b35b00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --border: #2b2e34;
+    --surface: #1c1f24;
+    --accent: #6fa0ff;
+    --pass: #4caf6d;
+    --fail: #e5645b;
+    --error: #d99a4e;
+  }
+  html {
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.nav-title {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.nav-link {
+  font-size: 13px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-link.disabled {
+  color: var(--muted);
+  cursor: default;
+  pointer-events: none;
+}
+
+.env-banner {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+tr:hover td {
+  background: var(--surface);
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-pass {
+  background: color-mix(in srgb, var(--pass) 18%, transparent);
+  color: var(--pass);
+}
+
+.badge-fail {
+  background: color-mix(in srgb, var(--fail) 18%, transparent);
+  color: var(--fail);
+}
+
+.badge-error {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  color: var(--error);
+}
+
+.badge-neutral {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.state-box {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
+  margin-top: 24px;
+}
+
+.state-box.error {
+  border-color: var(--fail);
+  color: var(--fail);
+}
+
+.summary-row {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  margin: 16px 0 24px;
+}
+
+.summary-stat .label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.summary-stat .value {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.meta-line {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.heuristic-note {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 12px 0 20px;
+}
+
+details.evidence summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+details.evidence pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11.5px;
+  overflow-x: auto;
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.doc-id-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.doc-id-pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.doc-id-pill.relevant {
+  border-color: var(--pass);
+  color: var(--pass);
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}

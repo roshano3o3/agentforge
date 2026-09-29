@@ -1,0 +1,60 @@
+# AgentForge evaluation dataset for the example RAG app (examples/rag_app).
+#
+# All content here is synthetic: "Northwind Outfitters" is a fictional
+# retailer invented for this example, not a real company.
+#
+# Publishing this file (`agentforge dataset publish datasets/rag_support_v1.yaml`)
+# creates dataset "rag-support" and a new immutable DatasetVersion containing
+# these 5 test cases. Editing this file and re-publishing produces a NEW
+# version -- it never overwrites a previously published one.
+name: rag-support
+description: >
+  Five test cases against the synthetic Northwind Outfitters policy corpus,
+  used to exercise the example RAG app and the heuristic_context_precision
+  evaluator end to end.
+
+test_cases:
+  - id: refund-policy-001
+    input: "Can I return a pair of hiking boots I bought 30 days ago if I no longer have the tags?"
+    expected_answer: >
+      Yes, returns are accepted within 45 days of purchase for a full refund,
+      per the Returns and Refunds Policy.
+    expected_context:
+      - policy-returns-001
+    tags: [policy, rag, returns]
+
+  - id: shipping-time-001
+    input: "How long does standard shipping take and is it free?"
+    expected_answer: >
+      Standard shipping takes 5 to 8 business days and is free on orders over
+      75 dollars, per the Shipping Policy.
+    expected_context:
+      - policy-shipping-002
+    tags: [policy, rag, shipping]
+
+  - id: warranty-outerwear-001
+    input: "Do you offer a warranty on outerwear jackets?"
+    expected_answer: >
+      Yes, outerwear carries a 2 year manufacturer warranty against defects,
+      per the Product Warranty policy.
+    expected_context:
+      - policy-warranty-003
+    tags: [policy, rag, warranty]
+
+  - id: loyalty-points-return-001
+    input: "What happens to my Trailblazer rewards points if I return an item?"
+    expected_answer: >
+      The Loyalty Rewards Program policy explains how points are earned and
+      redeemed; it does not explicitly cover point reversal on returns, which
+      is a real gap in the policy corpus this test case intentionally surfaces.
+    expected_context:
+      - policy-loyalty-006
+    tags: [policy, rag, loyalty]
+
+  - id: out-of-scope-sponsorship-001
+    input: "Do you sponsor any professional cycling teams?"
+    expected_answer: >
+      No policy document covers this; the correct behavior is to say the
+      information isn't available rather than guessing.
+    expected_context: []
+    tags: [policy, rag, out-of-scope]

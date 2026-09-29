@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentforge}
+      POSTGRES_DB: ${POSTGRES_DB:-agentforge}
+    # Bound to localhost only -- this setup is not meant to be reachable
+    # from outside this machine. See README "Security / not for public
+    # deployment".
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - agentforge_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  agentforge_postgres_data:
