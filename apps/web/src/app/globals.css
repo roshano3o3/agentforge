@@ -264,8 +264,7 @@ details.evidence pre {
 }
 
 .inline-form input,
-.draft-form input,
-.edit-attempt-panel input {
+.draft-form input {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
@@ -278,8 +277,7 @@ details.evidence pre {
 
 .inline-form button,
 .draft-form button,
-.publish-button,
-.edit-attempt-panel button {
+.publish-button {
   border: 1px solid var(--accent);
   background: var(--accent);
   color: white;
@@ -316,19 +314,3 @@ details.evidence pre {
   margin-bottom: 8px;
 }
 
-.edit-attempt-panel {
-  margin-top: 20px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.edit-attempt-panel h3 {
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-.edit-attempt-panel > input {
-  width: 300px;
-}

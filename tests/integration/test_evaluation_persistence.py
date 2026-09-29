@@ -19,15 +19,41 @@ async def _publish_run_setup(client: AsyncClient, test_cases: list[dict]) -> dic
         await client.post(f"/applications/{application['id']}/versions", json={"version": "v1", "description": None})
     ).json()
     dataset = (await client.post("/datasets", json={"name": "ds", "description": None})).json()
-    dataset_version = (
-        await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": test_cases})
-    ).json()
+    draft = (await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": test_cases})).json()
+    dataset_version = (await client.post(f"/datasets/ds/versions/{draft['version']}/publish")).json()
     return {
         "application_id": application["id"],
         "application_version_id": app_version["id"],
         "dataset_version_id": dataset_version["id"],
         "test_case_ids": [tc["id"] for tc in dataset_version["test_cases"]],
     }
+
+
+async def test_run_creation_rejects_a_draft_dataset_version(
+    client: AsyncClient, sample_test_cases: list[dict]
+) -> None:
+    application = (await client.post("/applications", json={"name": "app", "description": None})).json()
+    app_version = (
+        await client.post(f"/applications/{application['id']}/versions", json={"version": "v1", "description": None})
+    ).json()
+    dataset = (await client.post("/datasets", json={"name": "ds", "description": None})).json()
+    draft = (
+        await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": sample_test_cases})
+    ).json()  # never published
+
+    resp = await client.post(
+        "/runs",
+        json={
+            "application_id": application["id"],
+            "application_version_id": app_version["id"],
+            "dataset_version_id": draft["id"],
+            "provider_type": "local-deterministic",
+            "evaluator_name": "heuristic_context_precision",
+            "evaluator_version": "1.0.0",
+        },
+    )
+    assert resp.status_code == 400
+    assert "draft" in resp.json()["detail"].lower()
 
 
 async def test_run_lifecycle_persists_results_and_computes_aggregates(

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentforge_api.db.base import Base
 from agentforge_api.models._shared import new_id, utcnow
+
+
+class DatasetVersionStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
 
 
 class Dataset(Base):
@@ -21,10 +29,20 @@ class Dataset(Base):
 
 
 class DatasetVersion(Base):
-    """Immutable once created: no API route ever updates a row here after
-    insert. Republishing a dataset always creates a new, higher `version`
-    rather than editing an existing one, so historical evaluation runs keep
-    referencing exactly the test cases they were evaluated against.
+    """A dataset version is a two-state object: `draft` (mutable -- test
+    cases can be added/edited/deleted via PATCH) or `published` (frozen
+    forever -- PATCH returns 409). The transition is one-way: publishing
+    (`POST .../publish`) sets `published_at` and flips status; nothing ever
+    flips it back. This is enforced in the service layer (see
+    routers/datasets.py) AND at the DB layer (see the
+    `dataset_version_immutability` migration for the Postgres trigger /
+    SQLite trigger set that blocks test_case mutation and un-publishing
+    directly, independent of the API).
+
+    Editing a published version is only ever done by creating a NEW draft
+    version that copies its test cases (`POST .../new-draft`) -- there is no
+    way to modify a published version's own row or its test cases, by any
+    route.
     """
 
     __tablename__ = "dataset_versions"
@@ -33,7 +51,11 @@ class DatasetVersion(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     dataset_id: Mapped[str] = mapped_column(String(36), ForeignKey("datasets.id"), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    status: Mapped[DatasetVersionStatus] = mapped_column(
+        SAEnum(DatasetVersionStatus), default=DatasetVersionStatus.draft, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="versions")
     test_cases: Mapped[list["TestCase"]] = relationship(
@@ -42,7 +64,9 @@ class DatasetVersion(Base):
 
 
 class TestCase(Base):
-    """Immutable once created — belongs to an immutable DatasetVersion."""
+    """Mutable while the parent DatasetVersion is a draft; frozen once it's
+    published (see DatasetVersion's docstring for how that's enforced).
+    """
 
     __tablename__ = "test_cases"
     __table_args__ = (UniqueConstraint("dataset_version_id", "case_key", name="uq_case_key_per_version"),)

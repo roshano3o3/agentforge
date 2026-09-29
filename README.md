@@ -11,8 +11,8 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - One evaluator: `heuristic_context_precision` — a deterministic document-ID overlap heuristic, explicitly **not** the RAGAS metric and **not** an LLM judge. See [`docs/evaluators.md`](docs/evaluators.md) for the exact formula.
 - An example RAG app (`examples/rag_app`) over synthetic "Northwind Outfitters" policy documents, using a deterministic keyword-overlap retriever — no external API calls.
 - A Next.js dashboard with three working pages — **Applications**, **Datasets**, **Runs** (each list + detail) — reading and writing only real persisted data over HTTP. Regression / Trace Explorer / Safety are stubbed nav links, not fake pages.
-- The Datasets page lets you create a dataset, compose test cases, and publish an immutable version through the UI — and lets you try to edit a published version and watch the API reject it with a real `409`, evidence in `docs/screenshots/`.
-- 27 automated tests: 26 Python (unit + API integration + CLI-subprocess end-to-end) and 1 real browser test (Playwright/Chromium) that drives the actual UI — see [Testing](#testing).
+- Dataset versions are a real **draft → published** state machine: a draft is created, edited (add/edit/delete test cases) through the UI or API, then explicitly published — a one-way transition enforced in the service layer *and* by a DB trigger (real Postgres trigger + real SQLite trigger, not just a comment), independent of the API code. Publishing an already-published version, or PATCHing one, returns `409` from the database itself if the API check were ever bypassed. "Editing" a published version means creating a new draft copied from it (`POST .../new-draft`) — never in-place.
+- 34 automated tests: 33 Python (unit + API integration + CLI-subprocess end-to-end) and 1 real browser test (Playwright/Chromium) that drives the actual UI — see [Testing](#testing).
 
 Everything in the CLI table output and the dashboard comes from a real, persisted `EvaluationRun`/`EvaluationResult` row. Nothing is hardcoded.
 
@@ -89,20 +89,29 @@ These scores are not curated to look good — a 20% pass rate against a 0.7 thre
 
 Inspect the same run at `http://127.0.0.1:3000/runs/<run-id>` — every case's input, expected relevant doc IDs, retrieved doc IDs, score, and evidence JSON is there, sourced from the same `GET /runs/{id}` the CLI could also call (`agentforge runs show <run-id>`).
 
-## Applications, Datasets, and the immutability demo
+## Applications, Datasets, and dataset version lifecycle
 
 `http://127.0.0.1:3000/applications` and `.../datasets` are real CRUD-ish pages, not the CLI-only flow from earlier in this phase:
 
 - **Applications**: create one, view its versions. (There's no separate `Project` entity — Application is the top-level container; see `docs/architecture.md`.)
-- **Datasets**: create one, compose test cases in a draft (client-side, unpublished), publish — which always creates a new, immutable `DatasetVersion`. Each published test case has a **"Try to edit"** button that sends a real `PATCH` to the API and shows the response inline. The API always rejects it with `409 Conflict` (`PATCH /datasets/{name}/versions/{version}` is a dedicated route that exists purely to give that explicit rejection, rather than a route not existing at all).
+- **Datasets**: create one, then a version goes through a real state machine:
+  1. **New draft** — creates an empty, mutable `DatasetVersion`.
+  2. **Edit it** — add / edit / delete test cases, each a real `PATCH` that replaces the draft's test-case set (diffed server-side by `case_key`).
+  3. **Publish** — one-way transition to `published`. Frozen forever from this point.
+  4. **Locked** — a published version shows a 🔒 badge, has no edit controls, and a direct `PATCH` against it returns `409 Conflict` — enforced in the API's service layer *and independently* by a DB trigger (see `docs/architecture.md`), so the guarantee holds even if the API check were ever bypassed or buggy.
+  5. **Create new version from this** — the only way to "edit" a published version's content: copies its test cases into a brand-new draft (next version number), which goes through the same cycle.
 
-Real screenshots from an actual Playwright run, in `docs/screenshots/`: [`applications.png`](docs/screenshots/applications.png), [`dataset-detail.png`](docs/screenshots/dataset-detail.png) (a published version with its test cases), [`dataset-edit-rejected.png`](docs/screenshots/dataset-edit-rejected.png) (the live `HTTP 409` response rendered in the UI), [`runs.png`](docs/screenshots/runs.png), [`run-detail.png`](docs/screenshots/run-detail.png).
+Real screenshots from an actual Playwright run, in `docs/screenshots/`: [`applications.png`](docs/screenshots/applications.png), [`dataset-draft-editing.png`](docs/screenshots/dataset-draft-editing.png) (editing a case in a draft), [`dataset-published-locked.png`](docs/screenshots/dataset-published-locked.png) (locked, no edit controls, after a real `409` was confirmed), [`dataset-v2-from-v1.png`](docs/screenshots/dataset-v2-from-v1.png) (a new draft copied from the published v1, v1 itself untouched), [`runs.png`](docs/screenshots/runs.png), [`run-detail.png`](docs/screenshots/run-detail.png).
 
 ### A real bug this Playwright test caught: the Runs page likely never actually worked via `127.0.0.1`
 
 Building the Playwright test surfaced a genuine bug in the previous state of this repo, not just in the new pages. Next.js 16 blocks cross-origin requests to dev-only resources (JS chunks, HMR) by default; accessing the dev server via `127.0.0.1` instead of `localhost` counts as cross-origin and gets silently blocked — the page's HTML shell renders, but the client JavaScript bundle never loads, so no `"use client"` component's `useEffect` ever runs, so **no client-side `fetch` to the API ever happens.** The page just sits on its loading state forever, with no console error, no failed network request — nothing in the browser to indicate why.
 
 The original README told you to open `http://127.0.0.1:3000/runs`. Before the fix below, that URL would never have actually loaded any data — only `http://localhost:3000/runs` would have worked. This was not caught during Phase 1 because the "Runs page verification" done at the time was CORS-header-and-build-only, explicitly flagged as unable to load a real browser. Fixed in `apps/web/next.config.ts` (`allowedDevOrigins: ["127.0.0.1", "localhost"]`) and confirmed working via both the Playwright suite and a standalone headless-browser check against the original `:3000`/`:8000` setup.
+
+### A second real bug: a stale in-memory collection after PATCH, caught by the integration test before it ever reached the UI
+
+Building the draft/publish PATCH endpoint, the first implementation read a `DatasetVersion`'s `test_cases` relationship (to diff against the incoming request), mutated it, committed, then re-queried the same version for the response. The re-query came back with the *pre-mutation* data — an edited case appeared unedited, a deleted case reappeared, a new case was missing. Root cause: the app's async session is created with `expire_on_commit=False` (deliberately, to avoid implicit lazy-load I/O after commit in async code), so once a relationship is loaded once in a session, a later `selectinload` query against the same identity-mapped row does **not** refresh it — it hands back the stale, already-loaded collection. `session.expire_all()` seemed like the obvious fix; calling it produced a `MissingGreenlet` error from SQLAlchemy's async internals instead. The actual fix (in `apps/api/agentforge_api/routers/datasets.py`) was to never let the mutating code path touch the ORM relationship at all — query existing test cases directly, and fetch the version for a status check without eager-loading `test_cases` in the first place, so there's nothing stale to hand back. Caught by `tests/integration/test_dataset_immutability.py::test_patch_edits_a_draft_version_in_place` before it ever reached the browser.
 
 ## Evaluator
 
@@ -119,13 +128,13 @@ See [`docs/architecture.md`](docs/architecture.md) for the component diagram, th
 .\scripts\test-ui.ps1   # Playwright: real Chromium, drives the actual UI
 ```
 
-`test.ps1` runs `tests/unit` (the scoring formula — perfect/partial/zero-overlap/zero-retrieval, order-independence, no double-counting duplicates), `tests/integration` (dataset immutability including the `409` edit-rejection, application/dataset listing, evaluation-run persistence and aggregation — against a real FastAPI app + real async SQLAlchemy session over in-memory SQLite), and `tests/e2e` (the actual `agentforge` CLI, as a subprocess, against a really-running uvicorn server). **None of this touches a browser or the frontend.**
+`test.ps1` runs `tests/unit` (the scoring formula — perfect/partial/zero-overlap/zero-retrieval, order-independence, no double-counting duplicates), `tests/integration` (dataset draft/publish state machine — creation, editing, publish, re-publish rejection, PATCH-on-published rejection with `409`, new-draft-from-version copying, `latest` resolving only published versions — plus application/dataset listing and evaluation-run persistence/aggregation, all against a real FastAPI app + real async SQLAlchemy session over in-memory SQLite), and `tests/e2e` (the actual `agentforge` CLI, as a subprocess, against a really-running uvicorn server). **None of this touches a browser or the frontend.**
 
-`test-ui.ps1` runs `apps/web/e2e/dataset-flow.spec.ts` in real Chromium (via Playwright — no Chrome extension needed, it drives its own browser). It spins up its own API (fresh temp SQLite, port 8010) and web server (port 3010), seeds one real run via the CLI, then: loads Applications, creates a dataset through the UI, composes and publishes two test cases, opens the published version, clicks "Try to edit," confirms the API's live `409` is what's rendered, independently re-fetches the version over the API to prove the content is actually untouched, then loads Runs and a run detail page. Screenshots go to `docs/screenshots/`.
+`test-ui.ps1` runs `apps/web/e2e/dataset-flow.spec.ts` in real Chromium (via Playwright — no Chrome extension needed, it drives its own browser). It spins up its own API (fresh temp SQLite, port 8010) and web server (port 3010), seeds one real run via the CLI, then: loads Applications, creates a dataset through the UI, creates a draft version, adds a test case, edits it in place, publishes, confirms the locked badge appears with no edit controls left, independently sends a direct `PATCH` to the API to confirm it's rejected with a real `409`, clicks "Create new version from this" to get a v2 draft copied from the now-published v1, confirms v1 itself is untouched, then loads Runs and a run detail page. Screenshots go to `docs/screenshots/`.
 
 **Note:** Next.js's dev server holds a lock per project directory, not per port — `test-ui.ps1` will fail to start if `dev-web.ps1` (or any other `next dev` in this repo) is already running. Stop it first.
 
-Last run in this environment: **26 Python tests passed** (Python 3.12.7, Windows, both Git Bash and native PowerShell) and **1/1 Playwright test passed** (Chromium).
+Last run in this environment: **33 Python tests passed** (Python 3.12.7, Windows, both Git Bash and native PowerShell) and **1/1 Playwright test passed** (Chromium).
 
 No coverage percentage is claimed here because none has been measured.
 
@@ -161,7 +170,8 @@ Read this before assuming a feature exists.
 - **The example RAG app is entirely synthetic.** "Northwind Outfitters" is a fictional retailer invented for this repo; its policy documents are made up. The keyword-overlap retriever is deliberately simple (no embeddings, no ML) so the whole system runs offline with zero API keys.
 - **Docker/Postgres path is unverified in this environment.** Docker Desktop is not installed on the machine this phase was built on (`docker --version` fails in both Git Bash and PowerShell) — the Compose file and Dockerfile exist and were reviewed but never actually run. The SQLite path (Path A above) is what was actually executed and tested.
 - **A known SQLite-only serialization quirk:** timestamps re-fetched from the SQLite dev DB can lose their explicit UTC-offset suffix (still the same instant) in a way Postgres's `DateTime(timezone=True)` column does not exhibit. Documented in `docs/architecture.md` and handled explicitly in the relevant test.
-- **"Editing" a test case only exists pre-publish.** Once a `DatasetVersion` is published it is genuinely immutable — there is no way to change a test case in place, in the UI or the API, by design. The Datasets page's draft composer (add/remove rows client-side, then publish) is the only place anything resembling "editing" happens; the published-version "Try to edit" button exists specifically to demonstrate the `409` rejection, not to provide a real edit path.
+- **Editing is real, but only while a version is a draft.** Once published, a `DatasetVersion` is genuinely immutable — no route, in the UI or the API, can change its test cases, and the DB trigger blocks it even at the SQL level. The only way to change a published version's content is `POST .../new-draft` (copy into a fresh draft, edit that, publish it as the next version).
+- **A draft PATCH replaces the entire test-case set, not a partial merge.** Sending `{"test_cases": [...]}"` means "this is now the complete set" — case keys missing from the list are deleted. The UI always sends the full current list, so this is invisible in normal use, but it matters if you call the API directly.
 - **`agentforge.yaml` (from `agentforge init`) is still not read by anything.** No config-driven behavior yet — flags to the CLI are still the only way to configure a run.
 
 ## What's next

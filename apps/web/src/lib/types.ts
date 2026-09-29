@@ -79,21 +79,25 @@ export interface TestCase {
   tags: string[];
 }
 
+export type DatasetVersionStatus = "draft" | "published";
+
 export interface DatasetVersion {
   id: string;
   dataset_id: string;
   version: number;
-  published_at: string;
+  status: DatasetVersionStatus;
+  created_at: string;
+  published_at: string | null;
   test_cases: TestCase[];
 }
 
-// What the UI composes client-side, before publishing turns it into a real
-// immutable DatasetVersion. Not a wire type -- nothing this shape is ever
-// sent as-is; publish() converts each draft row into a TestCaseIn.
-export interface DraftTestCase {
+// Shape of the "add a test case" form. Not a wire type -- each field gets
+// converted into a TestCaseIn (expected_context/tags split on commas) when
+// sent as part of a full-replace PATCH.
+export interface DraftTestCaseForm {
   case_key: string;
   input: string;
   expected_answer: string;
-  expected_context: string; // comma-separated in the form, split on publish
-  tags: string; // comma-separated in the form, split on publish
+  expected_context: string; // comma-separated in the form, split on submit
+  tags: string; // comma-separated in the form, split on submit
 }

@@ -5,16 +5,19 @@ import { useParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
   ApiError,
-  attemptEditPublishedVersion,
+  createDraftVersion,
   getDataset,
   listDatasetVersions,
-  publishDatasetVersion,
+  newDraftFromVersion,
+  patchDraftVersion,
+  publishVersion,
+  type TestCaseInput,
 } from "@/lib/api";
-import type { Dataset, DatasetVersion, DraftTestCase, TestCase } from "@/lib/types";
+import type { Dataset, DatasetVersion, DraftTestCaseForm, TestCase } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
 
-const EMPTY_DRAFT: DraftTestCase = {
+const EMPTY_FORM: DraftTestCaseForm = {
   case_key: "",
   input: "",
   expected_answer: "",
@@ -29,28 +32,276 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+function toTestCaseInput(tc: TestCase): TestCaseInput {
+  return {
+    case_key: tc.case_key,
+    input: tc.input,
+    expected_answer: tc.expected_answer,
+    expected_context: tc.expected_context,
+    tags: tc.tags,
+  };
+}
+
+function formToTestCaseInput(f: DraftTestCaseForm): TestCaseInput {
+  return {
+    case_key: f.case_key,
+    input: f.input,
+    expected_answer: f.expected_answer.trim() || null,
+    expected_context: splitList(f.expected_context),
+    tags: splitList(f.tags),
+  };
+}
+
+function DraftVersionCard({
+  datasetName,
+  version,
+  onChanged,
+  onError,
+}: {
+  datasetName: string;
+  version: DatasetVersion;
+  onChanged: () => void;
+  onError: (message: string) => void;
+}) {
+  const [form, setForm] = useState<DraftTestCaseForm>(EMPTY_FORM);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+
+  async function submitReplace(testCases: TestCaseInput[]) {
+    setBusy(true);
+    try {
+      await patchDraftVersion(datasetName, version.version, testCases);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : "Could not update draft.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.case_key.trim() || !form.input.trim()) return;
+    const next = [...version.test_cases.map(toTestCaseInput), formToTestCaseInput(form)];
+    await submitReplace(next);
+    setForm(EMPTY_FORM);
+  }
+
+  async function handleDelete(caseKey: string) {
+    const next = version.test_cases.filter((tc) => tc.case_key !== caseKey).map(toTestCaseInput);
+    await submitReplace(next);
+  }
+
+  function startEdit(tc: TestCase) {
+    setEditingKey(tc.case_key);
+    setEditText(tc.input);
+  }
+
+  async function saveEdit(caseKey: string) {
+    const next = version.test_cases.map((tc) =>
+      tc.case_key === caseKey ? { ...toTestCaseInput(tc), input: editText } : toTestCaseInput(tc),
+    );
+    await submitReplace(next);
+    setEditingKey(null);
+  }
+
+  async function handlePublish() {
+    setPublishing(true);
+    try {
+      await publishVersion(datasetName, version.version);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : "Could not publish version.");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  return (
+    <div className="version-block">
+      <h3>
+        v{version.version} <span className="badge badge-neutral">DRAFT</span>{" "}
+        <span className="meta-line">· created {new Date(version.created_at).toLocaleString()}</span>
+      </h3>
+
+      {version.test_cases.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>case_key</th>
+              <th>input</th>
+              <th>expected_context</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {version.test_cases.map((tc) => (
+              <tr key={tc.id}>
+                <td className="mono">{tc.case_key}</td>
+                <td>
+                  {editingKey === tc.case_key ? (
+                    <input type="text" value={editText} onChange={(e) => setEditText(e.target.value)} />
+                  ) : (
+                    tc.input
+                  )}
+                </td>
+                <td>
+                  <div className="doc-id-list">
+                    {tc.expected_context.map((id) => (
+                      <span key={id} className="doc-id-pill relevant">
+                        {id}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  {editingKey === tc.case_key ? (
+                    <>
+                      <button type="button" disabled={busy} onClick={() => saveEdit(tc.case_key)}>
+                        Save
+                      </button>{" "}
+                      <button type="button" onClick={() => setEditingKey(null)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" disabled={busy} onClick={() => startEdit(tc)}>
+                        Edit
+                      </button>{" "}
+                      <button type="button" disabled={busy} onClick={() => handleDelete(tc.case_key)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <form onSubmit={handleAdd} className="draft-form">
+        <input
+          type="text"
+          placeholder="case_key (e.g. refund-policy-001)"
+          value={form.case_key}
+          onChange={(e) => setForm({ ...form, case_key: e.target.value })}
+          required
+        />
+        <input
+          type="text"
+          placeholder="input (the question)"
+          value={form.input}
+          onChange={(e) => setForm({ ...form, input: e.target.value })}
+          required
+        />
+        <input
+          type="text"
+          placeholder="expected_context (comma-separated doc ids)"
+          value={form.expected_context}
+          onChange={(e) => setForm({ ...form, expected_context: e.target.value })}
+        />
+        <input
+          type="text"
+          placeholder="tags (comma-separated)"
+          value={form.tags}
+          onChange={(e) => setForm({ ...form, tags: e.target.value })}
+        />
+        <button type="submit" disabled={busy}>
+          Add case
+        </button>
+      </form>
+
+      <button
+        type="button"
+        onClick={handlePublish}
+        disabled={publishing || version.test_cases.length === 0}
+        className="publish-button"
+        title={version.test_cases.length === 0 ? "Add at least one test case first" : undefined}
+      >
+        {publishing ? "Publishing…" : "Publish this version"}
+      </button>
+    </div>
+  );
+}
+
+function PublishedVersionCard({
+  datasetName,
+  version,
+  onChanged,
+  onError,
+}: {
+  datasetName: string;
+  version: DatasetVersion;
+  onChanged: () => void;
+  onError: (message: string) => void;
+}) {
+  const [copying, setCopying] = useState(false);
+
+  async function handleNewDraft() {
+    setCopying(true);
+    try {
+      await newDraftFromVersion(datasetName, version.version);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : "Could not create new version.");
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  return (
+    <div className="version-block">
+      <h3>
+        v{version.version} <span className="badge badge-pass">🔒 PUBLISHED</span>{" "}
+        <span className="meta-line">
+          · published {version.published_at ? new Date(version.published_at).toLocaleString() : ""}
+        </span>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>case_key</th>
+            <th>input</th>
+            <th>expected_context</th>
+          </tr>
+        </thead>
+        <tbody>
+          {version.test_cases.map((tc) => (
+            <tr key={tc.id}>
+              <td className="mono">{tc.case_key}</td>
+              <td>{tc.input}</td>
+              <td>
+                <div className="doc-id-list">
+                  {tc.expected_context.map((id) => (
+                    <span key={id} className="doc-id-pill relevant">
+                      {id}
+                    </span>
+                  ))}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" onClick={handleNewDraft} disabled={copying} className="publish-button">
+        {copying ? "Creating…" : "Create new version from this"}
+      </button>
+    </div>
+  );
+}
+
 export default function DatasetDetailPage() {
   const params = useParams<{ name: string }>();
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [versions, setVersions] = useState<DatasetVersion[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState("");
-
-  // Draft composer: test cases being built up client-side, not yet
-  // published. This is the only place "editing" a test case makes sense --
-  // once published, a version is immutable (see the demo panel below).
-  const [draft, setDraft] = useState<DraftTestCase[]>([]);
-  const [form, setForm] = useState<DraftTestCase>(EMPTY_DRAFT);
-  const [publishing, setPublishing] = useState(false);
-  const [publishError, setPublishError] = useState("");
-
-  // Immutability demo: attempt to PATCH a published version's test case and
-  // show the API's real rejection, not a simulated one.
-  const [editAttempt, setEditAttempt] = useState<{ status: number; detail: string } | null>(null);
-  const [editingCase, setEditingCase] = useState<TestCase | null>(null);
-  const [editingVersion, setEditingVersion] = useState<number | null>(null);
-  const [editText, setEditText] = useState("");
-  const [attemptingEdit, setAttemptingEdit] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [creatingDraft, setCreatingDraft] = useState(false);
 
   function load() {
     setState("loading");
@@ -69,63 +320,17 @@ export default function DatasetDetailPage() {
 
   useEffect(load, [params.name]);
 
-  function addToDraft(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.case_key.trim() || !form.input.trim()) return;
-    setDraft((d) => [...d, form]);
-    setForm(EMPTY_DRAFT);
-  }
-
-  function removeFromDraft(index: number) {
-    setDraft((d) => d.filter((_, i) => i !== index));
-  }
-
-  async function handlePublish() {
-    if (!dataset || draft.length === 0) return;
-    setPublishing(true);
-    setPublishError("");
+  async function handleNewDraft() {
+    if (!dataset) return;
+    setCreatingDraft(true);
+    setActionError("");
     try {
-      await publishDatasetVersion(
-        dataset.id,
-        draft.map((d) => ({
-          case_key: d.case_key,
-          input: d.input,
-          expected_answer: d.expected_answer.trim() || null,
-          expected_context: splitList(d.expected_context),
-          tags: splitList(d.tags),
-        })),
-      );
-      setDraft([]);
+      await createDraftVersion(dataset.id, []);
       load();
     } catch (err) {
-      setPublishError(err instanceof ApiError ? err.message : "Could not publish version.");
+      setActionError(err instanceof ApiError ? err.message : "Could not create draft.");
     } finally {
-      setPublishing(false);
-    }
-  }
-
-  function openEditAttempt(testCase: TestCase, version: number) {
-    setEditingCase(testCase);
-    setEditingVersion(version);
-    setEditText(testCase.input);
-    setEditAttempt(null);
-  }
-
-  async function submitEditAttempt() {
-    if (!editingCase || editingVersion === null || !dataset) return;
-    setAttemptingEdit(true);
-    try {
-      await attemptEditPublishedVersion(dataset.name, editingVersion, { ...editingCase, input: editText });
-      // Should never reach here -- the API always rejects this with 409.
-      setEditAttempt({ status: 200, detail: "Unexpectedly succeeded — this should never happen." });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setEditAttempt({ status: err.status ?? 0, detail: err.message });
-      } else {
-        setEditAttempt({ status: 0, detail: "Unexpected error." });
-      }
-    } finally {
-      setAttemptingEdit(false);
+      setCreatingDraft(false);
     }
   }
 
@@ -147,155 +352,39 @@ export default function DatasetDetailPage() {
         <>
           <h1>{dataset.name}</h1>
           <p className="meta-line">{dataset.description ?? "(no description)"}</p>
-
-          <h2>Compose a new version</h2>
           <p className="meta-line">
-            Add test cases below, then publish. Publishing always creates a brand-new, immutable
-            version — it never modifies an existing one.
+            A version is a <strong>draft</strong> (editable — add/edit/delete test cases) until you{" "}
+            <strong>publish</strong> it, which freezes it forever. To change a published version&apos;s
+            content, use &quot;Create new version from this&quot; to start a new draft copied from it.
           </p>
 
-          <form onSubmit={addToDraft} className="draft-form">
-            <input
-              type="text"
-              placeholder="case_key (e.g. refund-policy-001)"
-              value={form.case_key}
-              onChange={(e) => setForm({ ...form, case_key: e.target.value })}
-              required
-            />
-            <input
-              type="text"
-              placeholder="input (the question)"
-              value={form.input}
-              onChange={(e) => setForm({ ...form, input: e.target.value })}
-              required
-            />
-            <input
-              type="text"
-              placeholder="expected_answer (optional)"
-              value={form.expected_answer}
-              onChange={(e) => setForm({ ...form, expected_answer: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="expected_context (comma-separated doc ids)"
-              value={form.expected_context}
-              onChange={(e) => setForm({ ...form, expected_context: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="tags (comma-separated)"
-              value={form.tags}
-              onChange={(e) => setForm({ ...form, tags: e.target.value })}
-            />
-            <button type="submit">Add to draft</button>
-          </form>
+          <button type="button" onClick={handleNewDraft} disabled={creatingDraft} className="publish-button">
+            {creatingDraft ? "Creating…" : "New draft"}
+          </button>
+          {actionError && <p className="form-error">{actionError}</p>}
 
-          {draft.length > 0 && (
-            <>
-              <table>
-                <thead>
-                  <tr>
-                    <th>case_key</th>
-                    <th>input</th>
-                    <th>expected_context</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {draft.map((d, i) => (
-                    <tr key={i}>
-                      <td className="mono">{d.case_key}</td>
-                      <td>{d.input}</td>
-                      <td>{d.expected_context || <span className="meta-line">(none)</span>}</td>
-                      <td>
-                        <button type="button" onClick={() => removeFromDraft(i)}>
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button type="button" onClick={handlePublish} disabled={publishing} className="publish-button">
-                {publishing ? "Publishing…" : `Publish version ${(versions[0]?.version ?? 0) + 1}`}
-              </button>
-            </>
-          )}
-          {publishError && <p className="form-error">{publishError}</p>}
-
-          <h2>Published versions</h2>
           {versions.length === 0 ? (
-            <div className="state-box">No published versions yet.</div>
+            <div className="state-box">No versions yet. Click &quot;New draft&quot; to start one.</div>
           ) : (
-            versions.map((v) => (
-              <div key={v.id} className="version-block">
-                <h3>
-                  v{v.version}{" "}
-                  <span className="meta-line">
-                    · published {new Date(v.published_at).toLocaleString()} · immutable
-                  </span>
-                </h3>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>case_key</th>
-                      <th>input</th>
-                      <th>expected_context</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {v.test_cases.map((tc) => (
-                      <tr key={tc.id}>
-                        <td className="mono">{tc.case_key}</td>
-                        <td>{tc.input}</td>
-                        <td>
-                          <div className="doc-id-list">
-                            {tc.expected_context.map((id) => (
-                              <span key={id} className="doc-id-pill relevant">
-                                {id}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td>
-                          <button type="button" onClick={() => openEditAttempt(tc, v.version)}>
-                            Try to edit
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))
-          )}
-
-          {editingCase && editingVersion !== null && (
-            <div className="edit-attempt-panel">
-              <h3>
-                Attempting to edit &quot;{editingCase.case_key}&quot; in published v{editingVersion}
-              </h3>
-              <input type="text" value={editText} onChange={(e) => setEditText(e.target.value)} />
-              <button type="button" onClick={submitEditAttempt} disabled={attemptingEdit}>
-                {attemptingEdit ? "Sending PATCH…" : "Send PATCH to API"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingCase(null);
-                  setEditAttempt(null);
-                }}
-              >
-                Close
-              </button>
-              {editAttempt && (
-                <div className={editAttempt.status === 409 ? "state-box error" : "state-box"}>
-                  <strong>HTTP {editAttempt.status}</strong>
-                  <div style={{ marginTop: 6 }}>{editAttempt.detail}</div>
-                </div>
-              )}
-            </div>
+            versions.map((v) =>
+              v.status === "draft" ? (
+                <DraftVersionCard
+                  key={v.id}
+                  datasetName={dataset.name}
+                  version={v}
+                  onChanged={load}
+                  onError={setActionError}
+                />
+              ) : (
+                <PublishedVersionCard
+                  key={v.id}
+                  datasetName={dataset.name}
+                  version={v}
+                  onChanged={load}
+                  onError={setActionError}
+                />
+              ),
+            )
           )}
         </>
       )}

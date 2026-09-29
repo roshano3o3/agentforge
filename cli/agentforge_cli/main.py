@@ -94,7 +94,13 @@ def dataset_publish(
     file: Path = typer.Argument(..., help="Path to a dataset YAML file."),
     api_url: str = typer.Option(DEFAULT_API_URL, "--api-url", help="AgentForge API base URL."),
 ) -> None:
-    """Validate, then publish a dataset YAML file as a new immutable DatasetVersion."""
+    """Validate, then publish a dataset YAML file as a new immutable DatasetVersion.
+
+    Under the hood this creates a draft with these test cases and
+    immediately publishes it -- from the CLI's perspective it's still one
+    atomic "publish a version" operation, but it goes through the same
+    draft-then-publish path the UI uses.
+    """
     try:
         name, description, test_cases = validate_dataset_file(file)
     except DatasetFileError as exc:
@@ -104,10 +110,11 @@ def dataset_publish(
     with AgentForgeClient(base_url=api_url) as client:
         try:
             dataset = client.upsert_dataset(name=name, description=description)
-            version = client.publish_dataset_version(
+            draft = client.create_draft_version(
                 dataset_id=dataset["id"],
                 test_cases=[tc.model_dump() for tc in test_cases],
             )
+            version = client.publish_dataset_version(dataset_name=name, version=draft["version"])
         except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
             console.print(f"[red]Failed to publish dataset:[/red] {exc}")
             raise typer.Exit(code=1)

@@ -20,9 +20,10 @@ function runCli(args: string[]) {
 test.beforeAll(() => {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
   // Seed one real, persisted evaluation run (via the real CLI, against the
-  // same fresh API instance this whole suite uses) so the Applications,
-  // Datasets, and Runs pages all have real data to screenshot -- not just
-  // whatever this one test creates through the UI.
+  // same fresh API instance this whole suite uses) so the Applications and
+  // Runs pages have real data to screenshot -- not just whatever this one
+  // test creates through the UI. The CLI's `dataset publish` itself now
+  // goes through the same draft-then-publish path the UI uses.
   runCli(["dataset", "publish", "datasets/rag_support_v1.yaml"]);
   runCli([
     "evaluate",
@@ -34,7 +35,7 @@ test.beforeAll(() => {
   ]);
 });
 
-test("dataset can be created and published through the UI, and editing a published version is rejected", async ({
+test("dataset version lifecycle through the UI: draft -> edit -> publish -> locked -> new version from it", async ({
   page,
 }) => {
   // -- Applications page (seeded by the CLI run above) --
@@ -56,51 +57,65 @@ test("dataset can be created and published through the UI, and editing a publish
   const datasetLink = page.getByRole("link", { name: datasetName });
   await expect(datasetLink).toBeVisible();
   await datasetLink.click();
-
-  // -- Dataset detail page: compose two test cases, then publish --
   await expect(page).toHaveURL(new RegExp(`/datasets/${datasetName}$`));
-  await expect(page.getByRole("heading", { name: datasetName })).toBeVisible();
 
-  async function addDraftCase(caseKey: string, input: string, expectedContext: string) {
-    await page.getByPlaceholder("case_key (e.g. refund-policy-001)").fill(caseKey);
-    await page.getByPlaceholder("input (the question)").fill(input);
-    await page.getByPlaceholder("expected_context (comma-separated doc ids)").fill(expectedContext);
-    await page.getByRole("button", { name: "Add to draft" }).click();
-  }
-
-  await addDraftCase("case-one", "What is the return window?", "policy-returns-001");
-  await addDraftCase("case-two", "Is shipping ever free?", "policy-shipping-002");
-
-  // Both drafted rows show up in the pre-publish table before anything is persisted.
-  await expect(page.getByText("case-one")).toBeVisible();
-  await expect(page.getByText("case-two")).toBeVisible();
-
-  await page.getByRole("button", { name: /Publish version 1/ }).click();
-
-  // Published version now shows both test cases, read from the real API response.
+  // -- Create a draft version --
+  await page.getByRole("button", { name: "New draft" }).click();
   await expect(page.getByText("v1", { exact: false }).first()).toBeVisible();
+  await expect(page.locator(".badge-neutral", { hasText: "DRAFT" })).toBeVisible();
+
+  // -- Add a test case to the draft --
+  await page.getByPlaceholder("case_key (e.g. refund-policy-001)").fill("case-one");
+  await page.getByPlaceholder("input (the question)").fill("What is the return window?");
+  await page.getByPlaceholder("expected_context (comma-separated doc ids)").fill("policy-returns-001");
+  await page.getByRole("button", { name: "Add case" }).click();
   await expect(page.getByRole("cell", { name: "case-one" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "case-two" })).toBeVisible();
-  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "dataset-detail.png"), fullPage: true });
 
-  // -- Immutability: attempt to edit the published version through the UI,
-  // and confirm the real API rejection (409) is what's shown, not a
-  // simulated one. --
-  await page.getByRole("button", { name: "Try to edit" }).first().click();
-  await page.locator(".edit-attempt-panel input").fill("an edited answer that should never be saved");
-  await page.getByRole("button", { name: "Send PATCH to API" }).click();
+  // -- Edit that case in place (only possible while the version is a draft) --
+  await page.getByRole("button", { name: "Edit" }).click();
+  const editInput = page.locator(".version-block input[type=text]").first();
+  await editInput.fill("What is the return window, edited?");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("What is the return window, edited?")).toBeVisible();
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "dataset-draft-editing.png"), fullPage: true });
 
-  const resultPanel = page.locator(".edit-attempt-panel .state-box");
-  await expect(resultPanel).toContainText("HTTP 409");
-  await expect(resultPanel).toContainText(/immutable/i);
-  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "dataset-edit-rejected.png"), fullPage: true });
+  // -- Publish it --
+  await page.getByRole("button", { name: "Publish this version" }).click();
+  await expect(page.locator(".badge-pass", { hasText: "PUBLISHED" })).toBeVisible();
 
-  // Prove the rejection was real, not just a UI message: re-fetch the
-  // version directly from the API and confirm the content is untouched.
-  const versionResponse = await page.request.get(`${API_URL}/datasets/${datasetName}/versions/1`);
-  const versionBody = await versionResponse.json();
-  const caseOne = versionBody.test_cases.find((tc: { case_key: string }) => tc.case_key === "case-one");
-  expect(caseOne.input).toBe("What is the return window?");
+  // Confirm it's actually locked: no Edit/Delete controls remain for this
+  // version's test cases, and the API rejects a direct PATCH with 409 --
+  // proving the lock is real, not just a UI convention.
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  const rejectResponse = await page.request.patch(`${API_URL}/datasets/${datasetName}/versions/1`, {
+    data: { test_cases: [{ case_key: "case-one", input: "hacked", expected_context: [], tags: [] }] },
+  });
+  expect(rejectResponse.status()).toBe(409);
+  const rejectBody = await rejectResponse.json();
+  expect(rejectBody.detail.toLowerCase()).toContain("immutable");
+
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "dataset-published-locked.png"), fullPage: true });
+
+  // -- Create v2 from v1: copies the (edited, published) case into a new draft --
+  await page.getByRole("button", { name: "Create new version from this" }).click();
+  await expect(page.getByText("v2", { exact: false }).first()).toBeVisible();
+
+  const v2Card = page.locator(".version-block", { has: page.getByRole("heading", { name: /^v2\b/ }) });
+  await expect(v2Card.locator(".badge-neutral", { hasText: "DRAFT" })).toBeVisible();
+  await expect(v2Card.getByRole("cell", { name: "case-one" })).toBeVisible();
+  await expect(v2Card.getByText("What is the return window, edited?")).toBeVisible();
+  // v1 itself is untouched by creating v2.
+  const v1Card = page.locator(".version-block", { has: page.getByRole("heading", { name: /^v1\b/ }) });
+  await expect(v1Card.locator(".badge-pass", { hasText: "PUBLISHED" })).toBeVisible();
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "dataset-v2-from-v1.png"), fullPage: true });
+
+  // Independently verify via the API that this is all real, persisted data.
+  const versionsResp = await page.request.get(`${API_URL}/datasets/${datasetName}/versions`);
+  const versionsBody = await versionsResp.json();
+  expect(versionsBody.map((v: { version: number; status: string }) => [v.version, v.status])).toEqual([
+    [2, "draft"],
+    [1, "published"],
+  ]);
 
   // -- Runs page: the run seeded in beforeAll, with real persisted data --
   await page.goto("/runs");

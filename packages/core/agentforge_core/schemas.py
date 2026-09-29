@@ -24,6 +24,11 @@ class ResultStatus(str, Enum):
     error = "error"
 
 
+class DatasetVersionStatus(str, Enum):
+    draft = "draft"
+    published = "published"
+
+
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
@@ -59,7 +64,8 @@ class ApplicationVersionOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Dataset (immutable once published)
+# Dataset. A DatasetVersion is `draft` (mutable) until published, then
+# frozen forever -- see DatasetVersion's docstring in models/dataset.py.
 # ---------------------------------------------------------------------------
 
 
@@ -92,8 +98,16 @@ class TestCaseIn(BaseModel):
         return v
 
 
-class DatasetVersionPublishRequest(BaseModel):
-    test_cases: list[TestCaseIn] = Field(min_length=1)
+class DatasetVersionTestCasesRequest(BaseModel):
+    """Body shape for both creating a draft (POST .../versions) and editing
+    one (PATCH .../versions/{version}). PATCH replaces the draft's entire
+    test-case set with exactly this list -- the server diffs it against
+    what's currently stored (by case_key) and applies inserts/updates/
+    deletes accordingly; it is not a partial merge. An empty list is valid
+    (an empty draft, or "delete everything currently in this draft").
+    """
+
+    test_cases: list[TestCaseIn] = Field(default_factory=list)
 
     @field_validator("test_cases")
     @classmethod
@@ -120,7 +134,9 @@ class DatasetVersionOut(BaseModel):
     id: str
     dataset_id: str
     version: int
-    published_at: datetime
+    status: DatasetVersionStatus
+    created_at: datetime
+    published_at: datetime | None
     test_cases: list[TestCaseOut]
 
     model_config = {"from_attributes": True}

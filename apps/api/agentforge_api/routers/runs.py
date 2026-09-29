@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.application import Application, ApplicationVersion
-from agentforge_api.models.dataset import Dataset, DatasetVersion, TestCase
+from agentforge_api.models.dataset import Dataset, DatasetVersion, DatasetVersionStatus, TestCase
 from agentforge_api.models.evaluation import EvaluationResult, EvaluationRun, RunStatus
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -105,8 +105,18 @@ async def create_run(payload: EvaluationRunCreate, session: AsyncSession = Depen
         raise HTTPException(
             status_code=404, detail=f"application version '{payload.application_version_id}' not found"
         )
-    if not await session.get(DatasetVersion, payload.dataset_version_id):
+    dataset_version = await session.get(DatasetVersion, payload.dataset_version_id)
+    if not dataset_version:
         raise HTTPException(status_code=404, detail=f"dataset version '{payload.dataset_version_id}' not found")
+    if dataset_version.status != DatasetVersionStatus.published:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"dataset version '{payload.dataset_version_id}' is a draft (not published) -- "
+                "publish it before evaluating against it, so the run's dataset reference stays "
+                "reproducible."
+            ),
+        )
 
     run = EvaluationRun(
         application_id=payload.application_id,

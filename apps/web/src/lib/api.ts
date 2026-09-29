@@ -5,7 +5,6 @@ import type {
   DatasetVersion,
   EvaluationRun,
   EvaluationRunSummary,
-  TestCase,
 } from "./types";
 
 // Overridable via NEXT_PUBLIC_API_URL for non-default setups; defaults to
@@ -121,22 +120,33 @@ export interface TestCaseInput {
   tags: string[];
 }
 
-export function publishDatasetVersion(datasetId: string, testCases: TestCaseInput[]): Promise<DatasetVersion> {
+/** Creates a new DRAFT version (optionally pre-populated). Does not publish it. */
+export function createDraftVersion(datasetId: string, testCases: TestCaseInput[] = []): Promise<DatasetVersion> {
   return post<DatasetVersion>(`/datasets/${datasetId}/versions`, { test_cases: testCases });
 }
 
-/** Always rejected by the API with 409 -- published versions are immutable.
- * Exists so the UI can demonstrate that rejection explicitly rather than
- * just not offering an edit control. */
-export function attemptEditPublishedVersion(datasetName: string, version: number, testCase: TestCase): Promise<void> {
-  return patch<void>(`/datasets/${encodeURIComponent(datasetName)}/versions/${version}`, {
-    test_cases: [
-      {
-        case_key: testCase.case_key,
-        input: testCase.input,
-        expected_context: testCase.expected_context,
-        tags: testCase.tags,
-      },
-    ],
+/** Replaces a draft's entire test-case set. Rejected with 409 if the
+ * version is published -- the API enforces this, not the client. */
+export function patchDraftVersion(
+  datasetName: string,
+  version: number,
+  testCases: TestCaseInput[],
+): Promise<DatasetVersion> {
+  return patch<DatasetVersion>(`/datasets/${encodeURIComponent(datasetName)}/versions/${version}`, {
+    test_cases: testCases,
   });
+}
+
+/** One-way: draft -> published. Never reversed. */
+export function publishVersion(datasetName: string, version: number): Promise<DatasetVersion> {
+  return post<DatasetVersion>(`/datasets/${encodeURIComponent(datasetName)}/versions/${version}/publish`, undefined);
+}
+
+/** Creates a new draft (next version number) copying `version`'s test
+ * cases -- the supported way to "edit" a published version's content. */
+export function newDraftFromVersion(datasetName: string, version: number): Promise<DatasetVersion> {
+  return post<DatasetVersion>(
+    `/datasets/${encodeURIComponent(datasetName)}/versions/${version}/new-draft`,
+    undefined,
+  );
 }

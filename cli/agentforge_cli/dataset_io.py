@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from agentforge_core.schemas import DatasetVersionPublishRequest, TestCaseIn
+from agentforge_core.schemas import DatasetVersionTestCasesRequest, TestCaseIn
 
 
 class DatasetFileError(Exception):
@@ -67,7 +67,7 @@ def validate_dataset_file(path: Path) -> tuple[str, str | None, list[TestCaseIn]
     # schema the API uses, so "valid offline" really means "the API will
     # accept this".
     try:
-        DatasetVersionPublishRequest(test_cases=test_cases)
+        DatasetVersionTestCasesRequest(test_cases=test_cases)
     except ValidationError as exc:
         raise DatasetFileError(f"{path}: {exc}") from exc
 

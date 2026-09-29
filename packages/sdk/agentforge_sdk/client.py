@@ -49,8 +49,16 @@ class AgentForgeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def publish_dataset_version(self, dataset_id: str, test_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    def create_draft_version(self, dataset_id: str, test_cases: list[dict[str, Any]]) -> dict[str, Any]:
+        """Creates a new DRAFT dataset version (optionally pre-populated).
+        Does not publish it -- call `publish_dataset_version` for that.
+        """
         resp = self._client.post(f"/datasets/{dataset_id}/versions", json={"test_cases": test_cases})
+        resp.raise_for_status()
+        return resp.json()
+
+    def publish_dataset_version(self, dataset_name: str, version: int) -> dict[str, Any]:
+        resp = self._client.post(f"/datasets/{dataset_name}/versions/{version}/publish")
         resp.raise_for_status()
         return resp.json()
 
