@@ -74,3 +74,49 @@ async def test_unknown_dataset_version_returns_404(client: AsyncClient, sample_t
 
     resp = await client.get("/datasets/support/versions/99")
     assert resp.status_code == 404
+
+
+async def test_editing_a_published_version_is_rejected_with_409(
+    client: AsyncClient, sample_test_cases: list[dict]
+) -> None:
+    dataset = (await client.post("/datasets", json={"name": "support", "description": "d"})).json()
+    await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": sample_test_cases})
+
+    resp = await client.patch(
+        "/datasets/support/versions/1",
+        json={"test_cases": [{"case_key": "case-1", "input": "edited!", "expected_context": [], "tags": []}]},
+    )
+    assert resp.status_code == 409
+    assert "immutable" in resp.json()["detail"].lower()
+
+    # And the original content is provably untouched by the rejected attempt.
+    unchanged = (await client.get("/datasets/support/versions/1")).json()
+    assert unchanged["test_cases"][0]["input"] == sample_test_cases[0]["input"]
+
+
+async def test_list_dataset_versions_returns_all_versions_newest_first(
+    client: AsyncClient, sample_test_cases: list[dict]
+) -> None:
+    dataset = (await client.post("/datasets", json={"name": "support", "description": "d"})).json()
+    await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": sample_test_cases})
+    await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": sample_test_cases})
+
+    versions = (await client.get("/datasets/support/versions")).json()
+    assert [v["version"] for v in versions] == [2, 1]
+
+
+async def test_get_dataset_by_name(client: AsyncClient) -> None:
+    created = (await client.post("/datasets", json={"name": "support", "description": "d"})).json()
+    fetched = (await client.get("/datasets/support")).json()
+    assert fetched["id"] == created["id"]
+
+    missing = await client.get("/datasets/does-not-exist")
+    assert missing.status_code == 404
+
+
+async def test_list_datasets_returns_all(client: AsyncClient) -> None:
+    await client.post("/datasets", json={"name": "one", "description": None})
+    await client.post("/datasets", json={"name": "two", "description": None})
+
+    names = {d["name"] for d in (await client.get("/datasets")).json()}
+    assert names == {"one", "two"}

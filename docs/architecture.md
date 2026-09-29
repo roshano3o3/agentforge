@@ -124,6 +124,62 @@ does, so a timestamp can come back as `...12:34:56` instead of
 SQLite specifically. See the note in
 `tests/integration/test_evaluation_persistence.py`.
 
+## API surface added after the initial Phase 1 cut
+
+Reviewing Phase 1, three gaps were found and closed: no Applications/Datasets
+UI existed (only the CLI could create/publish them), the "e2e" tests were
+CLI-subprocess only (no browser, no frontend coverage), and dataset-version
+immutability was enforced only by a route's *absence* rather than an
+explicit rejection. Added:
+
+- `GET /applications`, `GET /applications/{id}/versions` — listing, for the
+  new Applications page.
+- `GET /datasets`, `GET /datasets/{name}`, `GET /datasets/{name}/versions`
+  — listing, for the new Datasets page.
+- `PATCH /datasets/{name}/versions/{version}` — always returns `409
+  Conflict`. Exists specifically so an edit attempt gets an explicit,
+  explained rejection instead of a bare 404/405 with no context; the
+  Datasets page's "Try to edit" button calls this for real and renders
+  whatever the API actually returns.
+
+No domain model changes — no `Project` entity was added. "Applications" in
+the UI *is* the `Application` model; a real `Project` wrapper above it is
+explicitly deferred (see README "Current limitations") rather than added as
+a zero-behavior pass-through entity.
+
+## Frontend testing: Playwright, and a real bug it found
+
+`apps/web/e2e/dataset-flow.spec.ts` (Playwright + Chromium) drives the
+actual UI in a real browser — distinct from `tests/e2e/` at the repo root,
+which is CLI-subprocess-only and never touches a browser. Playwright starts
+its own API (fresh temp SQLite, `apps/api/scripts/serve_fresh.py`) and web
+server on dedicated ports (8010/3010) so it never collides with a manually
+running dev setup.
+
+Building this test surfaced a real, previously-unknown bug: Next.js 16
+blocks cross-origin requests to dev-only resources (JS chunks, HMR
+websocket) by default, and accessing the dev server via `127.0.0.1` instead
+of `localhost` counts as cross-origin. The page's server-rendered HTML shell
+loads fine, but the client JS bundle is silently blocked — no `"use
+client"` component's `useEffect` ever runs, so no data fetch ever happens,
+with no console error or failed network request to point at why. This
+means the Phase 1 Runs page likely never actually rendered data when opened
+at `http://127.0.0.1:3000/runs` (only `localhost:3000` would have worked).
+Fixed via `allowedDevOrigins: ["127.0.0.1", "localhost"]` in
+`apps/web/next.config.ts`.
+
+Two more operational findings from getting this running:
+
+- The API's CORS allowlist (`Settings.cors_origins`) defaults to only
+  `:3000` origins; Playwright's web server on `:3010` needed
+  `AGENTFORGE_CORS_ORIGINS` set explicitly in `playwright.config.ts`. A
+  CORS rejection in the browser is not obviously distinguishable from "the
+  API is down" from the UI's error state alone.
+- Next.js's dev server holds a lock per project directory, not per port —
+  running `dev-web.ps1` and `test-ui.ps1` at the same time fails with
+  "Another next dev server is already running," even though they use
+  different ports.
+
 ## Not implemented in Phase 1
 
 Queue/worker, release policy engine and gate, replay, trace/span

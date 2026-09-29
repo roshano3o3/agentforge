@@ -10,8 +10,9 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - A CLI (`agentforge`) that publishes an immutable versioned dataset, runs a 5-case evaluation against an example RAG app, scores it with one deterministic evaluator, and persists everything.
 - One evaluator: `heuristic_context_precision` — a deterministic document-ID overlap heuristic, explicitly **not** the RAGAS metric and **not** an LLM judge. See [`docs/evaluators.md`](docs/evaluators.md) for the exact formula.
 - An example RAG app (`examples/rag_app`) over synthetic "Northwind Outfitters" policy documents, using a deterministic keyword-overlap retriever — no external API calls.
-- A Next.js dashboard with one working page: **Runs** (list + detail), reading only real persisted data over HTTP. Regression / Trace Explorer / Safety are stubbed nav links, not fake pages.
-- 19 automated tests (unit + integration + end-to-end CLI), all passing — see [Testing](#testing).
+- A Next.js dashboard with three working pages — **Applications**, **Datasets**, **Runs** (each list + detail) — reading and writing only real persisted data over HTTP. Regression / Trace Explorer / Safety are stubbed nav links, not fake pages.
+- The Datasets page lets you create a dataset, compose test cases, and publish an immutable version through the UI — and lets you try to edit a published version and watch the API reject it with a real `409`, evidence in `docs/screenshots/`.
+- 27 automated tests: 26 Python (unit + API integration + CLI-subprocess end-to-end) and 1 real browser test (Playwright/Chromium) that drives the actual UI — see [Testing](#testing).
 
 Everything in the CLI table output and the dashboard comes from a real, persisted `EvaluationRun`/`EvaluationResult` row. Nothing is hardcoded.
 
@@ -88,6 +89,21 @@ These scores are not curated to look good — a 20% pass rate against a 0.7 thre
 
 Inspect the same run at `http://127.0.0.1:3000/runs/<run-id>` — every case's input, expected relevant doc IDs, retrieved doc IDs, score, and evidence JSON is there, sourced from the same `GET /runs/{id}` the CLI could also call (`agentforge runs show <run-id>`).
 
+## Applications, Datasets, and the immutability demo
+
+`http://127.0.0.1:3000/applications` and `.../datasets` are real CRUD-ish pages, not the CLI-only flow from earlier in this phase:
+
+- **Applications**: create one, view its versions. (There's no separate `Project` entity — Application is the top-level container; see `docs/architecture.md`.)
+- **Datasets**: create one, compose test cases in a draft (client-side, unpublished), publish — which always creates a new, immutable `DatasetVersion`. Each published test case has a **"Try to edit"** button that sends a real `PATCH` to the API and shows the response inline. The API always rejects it with `409 Conflict` (`PATCH /datasets/{name}/versions/{version}` is a dedicated route that exists purely to give that explicit rejection, rather than a route not existing at all).
+
+Real screenshots from an actual Playwright run, in `docs/screenshots/`: [`applications.png`](docs/screenshots/applications.png), [`dataset-detail.png`](docs/screenshots/dataset-detail.png) (a published version with its test cases), [`dataset-edit-rejected.png`](docs/screenshots/dataset-edit-rejected.png) (the live `HTTP 409` response rendered in the UI), [`runs.png`](docs/screenshots/runs.png), [`run-detail.png`](docs/screenshots/run-detail.png).
+
+### A real bug this Playwright test caught: the Runs page likely never actually worked via `127.0.0.1`
+
+Building the Playwright test surfaced a genuine bug in the previous state of this repo, not just in the new pages. Next.js 16 blocks cross-origin requests to dev-only resources (JS chunks, HMR) by default; accessing the dev server via `127.0.0.1` instead of `localhost` counts as cross-origin and gets silently blocked — the page's HTML shell renders, but the client JavaScript bundle never loads, so no `"use client"` component's `useEffect` ever runs, so **no client-side `fetch` to the API ever happens.** The page just sits on its loading state forever, with no console error, no failed network request — nothing in the browser to indicate why.
+
+The original README told you to open `http://127.0.0.1:3000/runs`. Before the fix below, that URL would never have actually loaded any data — only `http://localhost:3000/runs` would have worked. This was not caught during Phase 1 because the "Runs page verification" done at the time was CORS-header-and-build-only, explicitly flagged as unable to load a real browser. Fixed in `apps/web/next.config.ts` (`allowedDevOrigins: ["127.0.0.1", "localhost"]`) and confirmed working via both the Playwright suite and a standalone headless-browser check against the original `:3000`/`:8000` setup.
+
 ## Evaluator
 
 See [`docs/evaluators.md`](docs/evaluators.md) for the exact formula, the zero-retrieval edge case definition, and why this is explicitly not RAGAS's `context_precision` or an LLM judge.
@@ -99,12 +115,17 @@ See [`docs/architecture.md`](docs/architecture.md) for the component diagram, th
 ## Testing
 
 ```powershell
-.\scripts\test.ps1
+.\scripts\test.ps1      # Python: unit + integration + CLI end-to-end (no browser)
+.\scripts\test-ui.ps1   # Playwright: real Chromium, drives the actual UI
 ```
 
-Runs `tests/unit` (the scoring formula — perfect/partial/zero-overlap/zero-retrieval, order-independence, no double-counting duplicates), `tests/integration` (dataset immutability, evaluation-run persistence and aggregation, against a real FastAPI app + real async SQLAlchemy session over in-memory SQLite), and `tests/e2e` (the actual `agentforge` CLI, as a subprocess, against a really-running uvicorn server — publish the real dataset file, run the real 5-case evaluation, then verify independently through the API that what the CLI printed is exactly what got persisted).
+`test.ps1` runs `tests/unit` (the scoring formula — perfect/partial/zero-overlap/zero-retrieval, order-independence, no double-counting duplicates), `tests/integration` (dataset immutability including the `409` edit-rejection, application/dataset listing, evaluation-run persistence and aggregation — against a real FastAPI app + real async SQLAlchemy session over in-memory SQLite), and `tests/e2e` (the actual `agentforge` CLI, as a subprocess, against a really-running uvicorn server). **None of this touches a browser or the frontend.**
 
-Last run in this environment: **19 passed, 0 failed** (Python 3.12.7, Windows, both Git Bash and native PowerShell).
+`test-ui.ps1` runs `apps/web/e2e/dataset-flow.spec.ts` in real Chromium (via Playwright — no Chrome extension needed, it drives its own browser). It spins up its own API (fresh temp SQLite, port 8010) and web server (port 3010), seeds one real run via the CLI, then: loads Applications, creates a dataset through the UI, composes and publishes two test cases, opens the published version, clicks "Try to edit," confirms the API's live `409` is what's rendered, independently re-fetches the version over the API to prove the content is actually untouched, then loads Runs and a run detail page. Screenshots go to `docs/screenshots/`.
+
+**Note:** Next.js's dev server holds a lock per project directory, not per port — `test-ui.ps1` will fail to start if `dev-web.ps1` (or any other `next dev` in this repo) is already running. Stop it first.
+
+Last run in this environment: **26 Python tests passed** (Python 3.12.7, Windows, both Git Bash and native PowerShell) and **1/1 Playwright test passed** (Chromium).
 
 No coverage percentage is claimed here because none has been measured.
 
@@ -112,15 +133,15 @@ No coverage percentage is claimed here because none has been measured.
 
 ```
 apps/api/          FastAPI backend, SQLAlchemy models, Alembic migration
-apps/web/           Next.js dashboard (Runs page only, so far)
+apps/web/           Next.js dashboard: Applications, Datasets, Runs pages + e2e/ (Playwright)
 packages/core/       Shared Pydantic request/response schemas (api + cli)
 packages/evaluators/  heuristic_context_precision (zero dependencies)
 packages/sdk/         Adapter protocol + lightweight AgentForgeClient (httpx only)
 cli/                  `agentforge` CLI (Typer)
 examples/rag_app/     Synthetic RAG app: documents, deterministic retriever, adapter
 datasets/             Versioned dataset YAML (rag_support_v1.yaml)
-tests/                unit / integration / e2e
-docs/                 architecture.md, evaluators.md
+tests/                unit / integration / e2e (Python — no browser)
+docs/                 architecture.md, evaluators.md, screenshots/
 scripts/              PowerShell setup/dev/test scripts (no Makefile, no `just` dependency)
 infrastructure/       reserved for later phases (Kubernetes, etc.) — empty in Phase 1
 ```
@@ -138,8 +159,10 @@ Read this before assuming a feature exists.
 - **No authentication.** The API has no auth of any kind. Everything is bound to `127.0.0.1` (localhost) — Postgres, the API, and the dashboard's default API URL — precisely because there is no access control. **This setup is not ready for any kind of public or shared deployment.**
 - **Trusted, unsandboxed adapter execution.** The CLI imports and calls the adapter function directly, in-process. This is fine for example/local code you wrote yourself; it is not a sandbox and provides no isolation from arbitrary code.
 - **The example RAG app is entirely synthetic.** "Northwind Outfitters" is a fictional retailer invented for this repo; its policy documents are made up. The keyword-overlap retriever is deliberately simple (no embeddings, no ML) so the whole system runs offline with zero API keys.
-- **Docker/Postgres path is unverified in this environment.** Docker Desktop wasn't available when this phase was built; the Compose file and Dockerfile exist and were reviewed but not run. The SQLite path (Path A above) is what was actually executed and tested.
+- **Docker/Postgres path is unverified in this environment.** Docker Desktop is not installed on the machine this phase was built on (`docker --version` fails in both Git Bash and PowerShell) — the Compose file and Dockerfile exist and were reviewed but never actually run. The SQLite path (Path A above) is what was actually executed and tested.
 - **A known SQLite-only serialization quirk:** timestamps re-fetched from the SQLite dev DB can lose their explicit UTC-offset suffix (still the same instant) in a way Postgres's `DateTime(timezone=True)` column does not exhibit. Documented in `docs/architecture.md` and handled explicitly in the relevant test.
+- **"Editing" a test case only exists pre-publish.** Once a `DatasetVersion` is published it is genuinely immutable — there is no way to change a test case in place, in the UI or the API, by design. The Datasets page's draft composer (add/remove rows client-side, then publish) is the only place anything resembling "editing" happens; the published-version "Try to edit" button exists specifically to demonstrate the `409` rejection, not to provide a real edit path.
+- **`agentforge.yaml` (from `agentforge init`) is still not read by anything.** No config-driven behavior yet — flags to the CLI are still the only way to configure a run.
 
 ## What's next
 

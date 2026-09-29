@@ -16,6 +16,12 @@ from agentforge_api.models.application import Application, ApplicationVersion
 router = APIRouter(prefix="/applications", tags=["applications"])
 
 
+@router.get("", response_model=list[ApplicationOut])
+async def list_applications(session: AsyncSession = Depends(get_session)) -> list[Application]:
+    rows = await session.scalars(select(Application).order_by(Application.created_at.desc()))
+    return list(rows)
+
+
 @router.post("", response_model=ApplicationOut)
 async def upsert_application(
     payload: ApplicationCreate, session: AsyncSession = Depends(get_session)
@@ -67,3 +73,17 @@ async def upsert_application_version(
     await session.commit()
     await session.refresh(row)
     return row
+
+
+@router.get("/{application_id}/versions", response_model=list[ApplicationVersionOut])
+async def list_application_versions(
+    application_id: str, session: AsyncSession = Depends(get_session)
+) -> list[ApplicationVersion]:
+    if not await session.get(Application, application_id):
+        raise HTTPException(status_code=404, detail=f"application '{application_id}' not found")
+    rows = await session.scalars(
+        select(ApplicationVersion)
+        .where(ApplicationVersion.application_id == application_id)
+        .order_by(ApplicationVersion.created_at.desc())
+    )
+    return list(rows)

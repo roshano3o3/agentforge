@@ -253,3 +253,82 @@ details.evidence pre {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+
+.inline-form,
+.draft-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  align-items: center;
+}
+
+.inline-form input,
+.draft-form input,
+.edit-attempt-panel input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  flex: 1;
+  min-width: 140px;
+}
+
+.inline-form button,
+.draft-form button,
+.publish-button,
+.edit-attempt-panel button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.inline-form button:disabled,
+.draft-form button:disabled,
+.publish-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.publish-button {
+  margin: 12px 0 24px;
+}
+
+.form-error {
+  color: var(--fail);
+  font-size: 13px;
+  margin: -8px 0 16px;
+}
+
+.version-block {
+  margin-bottom: 28px;
+}
+
+.version-block h3 {
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.edit-attempt-panel {
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.edit-attempt-panel h3 {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.edit-attempt-panel > input {
+  width: 300px;
+}

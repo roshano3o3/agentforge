@@ -47,3 +47,53 @@ export interface EvaluationRun extends EvaluationRunSummary {
   git_commit_sha: string | null;
   results: EvaluationResult[];
 }
+
+export interface Application {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface ApplicationVersion {
+  id: string;
+  application_id: string;
+  version: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface Dataset {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface TestCase {
+  id: string;
+  case_key: string;
+  input: string;
+  expected_answer: string | null;
+  expected_context: string[];
+  tags: string[];
+}
+
+export interface DatasetVersion {
+  id: string;
+  dataset_id: string;
+  version: number;
+  published_at: string;
+  test_cases: TestCase[];
+}
+
+// What the UI composes client-side, before publishing turns it into a real
+// immutable DatasetVersion. Not a wire type -- nothing this shape is ever
+// sent as-is; publish() converts each draft row into a TestCaseIn.
+export interface DraftTestCase {
+  case_key: string;
+  input: string;
+  expected_answer: string;
+  expected_context: string; // comma-separated in the form, split on publish
+  tags: string; // comma-separated in the form, split on publish
+}

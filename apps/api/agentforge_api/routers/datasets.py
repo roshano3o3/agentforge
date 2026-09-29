@@ -12,6 +12,12 @@ from agentforge_api.models.dataset import Dataset, DatasetVersion, TestCase
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
+@router.get("", response_model=list[DatasetOut])
+async def list_datasets(session: AsyncSession = Depends(get_session)) -> list[Dataset]:
+    rows = await session.scalars(select(Dataset).order_by(Dataset.created_at.desc()))
+    return list(rows)
+
+
 @router.post("", response_model=DatasetOut)
 async def upsert_dataset(payload: DatasetCreate, session: AsyncSession = Depends(get_session)) -> Dataset:
     existing = await session.scalar(select(Dataset).where(Dataset.name == payload.name))
@@ -70,6 +76,28 @@ async def publish_dataset_version(
     return result
 
 
+@router.get("/{name}", response_model=DatasetOut)
+async def get_dataset(name: str, session: AsyncSession = Depends(get_session)) -> Dataset:
+    dataset = await session.scalar(select(Dataset).where(Dataset.name == name))
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"dataset '{name}' not found")
+    return dataset
+
+
+@router.get("/{name}/versions", response_model=list[DatasetVersionOut])
+async def list_dataset_versions(name: str, session: AsyncSession = Depends(get_session)) -> list[DatasetVersion]:
+    dataset = await session.scalar(select(Dataset).where(Dataset.name == name))
+    if not dataset:
+        raise HTTPException(status_code=404, detail=f"dataset '{name}' not found")
+    rows = await session.scalars(
+        select(DatasetVersion)
+        .options(selectinload(DatasetVersion.test_cases))
+        .where(DatasetVersion.dataset_id == dataset.id)
+        .order_by(DatasetVersion.version.desc())
+    )
+    return list(rows)
+
+
 @router.get("/{name}/versions/{version}", response_model=DatasetVersionOut)
 async def get_dataset_version(
     name: str, version: str, session: AsyncSession = Depends(get_session)
@@ -94,3 +122,19 @@ async def get_dataset_version(
     if not row:
         raise HTTPException(status_code=404, detail=f"dataset version '{version}' not found for dataset '{name}'")
     return row
+
+
+@router.patch("/{name}/versions/{version}")
+async def reject_dataset_version_edit(name: str, version: str) -> None:
+    """Dataset versions are immutable. This route exists (rather than being
+    absent, which would 404/405 with no explanation) purely to give a clear,
+    explicit rejection: publish a new version instead of editing this one.
+    """
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Dataset version '{name}' v{version} is published and immutable. "
+            "Test cases cannot be edited in place -- publish a new version "
+            "(POST /datasets/<dataset_id>/versions) instead."
+        ),
+    )
