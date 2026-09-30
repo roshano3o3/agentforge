@@ -1,9 +1,11 @@
 [project]
 name = "agentforge-evaluators"
 version = "0.1.0"
-description = "Deterministic (and later LLM-judge) evaluators for AgentForge"
+description = "Deterministic evaluators for AgentForge"
 requires-python = ">=3.12"
-dependencies = []
+# jsonschema: tool_args' JSON Schema matching. The only dependency; a partial
+# hand-rolled schema check would not honestly be "JSON Schema".
+dependencies = ["jsonschema>=4.20"]
 
 [build-system]
 requires = ["hatchling"]

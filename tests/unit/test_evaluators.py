@@ -47,20 +47,37 @@ def run(name: str, c: EvalInput, config: EvalConfig = CONFIG, **params: Any):
 # -- registry ----------------------------------------------------------------
 
 
+PHASE2_EVALUATORS = {
+    "exact_match",
+    "answer_contains",
+    "answer_regex",
+    "heuristic_context_precision",
+    "heuristic_context_recall",
+    "citation_correctness",
+    "latency",
+    "token_usage",
+    "estimated_cost",
+}
+TRAJECTORY = {
+    "tool_selection",
+    "forbidden_tool_use",
+    "sequence_order",
+    "tool_args",
+    "approval_required",
+    "loop_detection",
+    "step_limit",
+}
+
+
 def test_registry_has_every_required_evaluator_pinned_at_a_version() -> None:
-    names = {s.name for s in list_evaluators()}
-    assert names == {
-        "exact_match",
-        "answer_contains",
-        "answer_regex",
-        "heuristic_context_precision",
-        "heuristic_context_recall",
-        "citation_correctness",
-        "latency",
-        "token_usage",
-        "estimated_cost",
-    }
+    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY
     assert all("@" in key for key in DEFAULT_EVALUATORS)
+
+
+def test_default_base_is_unchanged_for_versions_without_config() -> None:
+    # Versions published before per-case config apply "every default
+    # evaluator"; adding trajectory evaluators must not change that set.
+    assert {key.partition("@")[0] for key in DEFAULT_EVALUATORS} == PHASE2_EVALUATORS
 
 
 def test_resolve_bare_name_and_exact_version() -> None:

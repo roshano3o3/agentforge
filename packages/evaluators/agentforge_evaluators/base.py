@@ -18,7 +18,21 @@ from typing import Any, Literal
 
 from agentforge_evaluators.pricing import ModelPrice
 
-EvaluatorKind = Literal["quality", "measurement"]
+EvaluatorKind = Literal["quality", "measurement", "trajectory"]
+
+
+@dataclass(frozen=True)
+class TrajectoryStep:
+    """One recorded agent step. `index` is 1-based and counts every step
+    (retrieval, tool calls, final answer) in order -- the "step N" that
+    reasons and the dashboard refer to."""
+
+    index: int
+    kind: str  # "retrieval" | "tool_call" | "final_answer"
+    name: str = ""
+    args: Mapping[str, Any] = field(default_factory=dict)
+    result: Any = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +47,10 @@ class EvalInput:
     input_tokens: int | None = None
     output_tokens: int | None = None
     model: str | None = None
+    # The agent's trajectory and the case's trajectory expectations
+    # (expected_tools, forbidden_tools, ...; see trajectory.py).
+    steps: tuple[TrajectoryStep, ...] = ()
+    trajectory: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

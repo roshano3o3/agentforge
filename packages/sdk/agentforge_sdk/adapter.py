@@ -16,7 +16,13 @@ Two adapter kinds, both executed by the AgentForge worker (inside Docker):
        "retrieved_doc_ids": ["..."],         # optional, default []
        "citations": ["..."],                 # optional, default []
        "input_tokens": 123, "output_tokens": 45,  # optional
-       "model": "..."}                       # optional
+       "model": "...",                       # optional
+       "steps": [                            # optional: the agent's trajectory, in order
+         {"kind": "tool_call", "name": "get_invoice",
+          "args": {"invoice_id": "INV-1002"}, "result": {...}, "error": null},
+         {"kind": "retrieval", "name": "retriever", "retrieved_doc_ids": ["doc-1"]},
+         {"kind": "final_answer", "output": "..."}
+       ]}
 
   The endpoint is also trusted: the worker calls whatever URL the run names.
   From inside Docker, a service on your host is `http://host.docker.internal:<port>`.
@@ -24,12 +30,41 @@ Two adapter kinds, both executed by the AgentForge worker (inside Docker):
 Both kinds get the same per-case timeout and exception capture: a case that
 raises, times out, or returns a malformed output is recorded as an error
 result and the run continues.
+
+This module is deliberately plain dataclasses: no server, DB, or framework
+imports, so any application can depend on it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Literal, Protocol
+
+StepKind = Literal["retrieval", "tool_call", "final_answer"]
+
+
+@dataclass
+class Step:
+    """One step of an agent's trajectory, as the agent reports it.
+
+    * ``tool_call``: ``name`` is the tool, ``args`` its arguments (a JSON
+      object), and exactly what came back -- ``result`` (any JSON value) or
+      ``error`` (a message) if the tool failed.
+    * ``retrieval``: ``name`` is the retriever, ``retrieved_doc_ids`` what it returned.
+    * ``final_answer``: ``output`` is the answer text.
+
+    ``duration_ms`` is optional and, like everything here, only ever reported
+    by the agent -- AgentForge doesn't invent timings.
+    """
+
+    kind: StepKind
+    name: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
+    result: Any = None
+    error: str | None = None
+    retrieved_doc_ids: list[str] = field(default_factory=list)
+    output: str | None = None
+    duration_ms: float | None = None
 
 
 @dataclass
@@ -38,6 +73,8 @@ class AdapterOutput:
 
     Token counts and model name are optional and only ever *reported* by the
     adapter -- AgentForge never guesses them. Leave them None if unknown.
+    ``steps`` is the ordered trajectory for agents; plain RAG apps can leave
+    it empty.
     """
 
     answer: str
@@ -46,6 +83,7 @@ class AdapterOutput:
     input_tokens: int | None = None
     output_tokens: int | None = None
     model: str | None = None
+    steps: list[Step] = field(default_factory=list)
 
 
 class Adapter(Protocol):

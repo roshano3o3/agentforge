@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from agentforge_evaluators import answer_match, operational, retrieval
+from agentforge_evaluators import answer_match, operational, retrieval, trajectory
 from agentforge_evaluators.base import EvaluatorFn, EvaluatorKind, EvaluatorSpec, Params, ParamValidator
 
 
@@ -197,4 +197,60 @@ register(
     _NO_PARAMS,
 )
 
-DEFAULT_EVALUATORS: list[str] = [s.key for s in list_evaluators()]
+
+
+def _trajectory_params(*keys: str) -> ParamValidator:
+    """Trajectory evaluators take their expectation from the case's
+    `trajectory` block; these params let a config override that key."""
+    allowed = frozenset(keys)
+
+    def validate(params: Params) -> dict[str, Any]:
+        try:
+            return trajectory.validate_trajectory(params, allowed=allowed) or {}
+        except trajectory.TrajectoryConfigError as exc:
+            raise InvalidParamsError(str(exc)) from exc
+
+    return validate
+
+
+register(
+    "tool_selection", "1.0.0", "trajectory",
+    "precision/recall of distinct tools called vs `expected_tools`; score = F1; passes when both >= threshold",
+    trajectory.tool_selection, _trajectory_params("expected_tools"),
+)  # fmt: skip
+register(
+    "forbidden_tool_use", "1.0.0", "trajectory",
+    "fails if any tool in `forbidden_tools` was called (reports each step)",
+    trajectory.forbidden_tool_use, _trajectory_params("forbidden_tools"),
+)  # fmt: skip
+register(
+    "sequence_order", "1.0.0", "trajectory",
+    "tool calls match `expected_sequence` exactly (strict) or contain it in order (subsequence)",
+    trajectory.sequence_order, _trajectory_params("expected_sequence"),
+)  # fmt: skip
+register(
+    "tool_args", "1.0.0", "trajectory",
+    "every call of each tool in `expected_args` matches its exact args or its JSON Schema",
+    trajectory.tool_args, _trajectory_params("expected_args"),
+)  # fmt: skip
+register(
+    "approval_required", "1.0.0", "trajectory",
+    "each call to a tool in `requires_approval_before` is preceded by its own approved approval step",
+    trajectory.approval_required, _trajectory_params("requires_approval_before", "approval_tool"),
+)  # fmt: skip
+register(
+    "loop_detection", "1.0.0", "trajectory",
+    "fails if any tool is called with identical args more than `max_identical_calls` times (default 2)",
+    trajectory.loop_detection, _trajectory_params("max_identical_calls"),
+)  # fmt: skip
+register(
+    "step_limit", "1.0.0", "trajectory",
+    "number of retrieval + tool_call steps <= `max_steps`",
+    trajectory.step_limit, _trajectory_params("max_steps"),
+)  # fmt: skip
+
+# The base for dataset versions with no evaluator config (published before
+# per-case config existed). Trajectory evaluators are deliberately left out,
+# so those versions keep exactly the evaluators they had when published.
+DEFAULT_EVALUATORS: list[str] = [s.key for s in list_evaluators() if s.kind != "trajectory"]
+TRAJECTORY_EVALUATORS: list[str] = [s.key for s in list_evaluators() if s.kind == "trajectory"]
