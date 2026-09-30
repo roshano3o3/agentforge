@@ -1,0 +1,21 @@
+# Per-model rates used by the `estimated_cost` evaluator. Every cost it
+# produces is an ESTIMATE: adapter-reported tokens x the rates below.
+#
+# AgentForge deliberately ships no vendor prices: a hardcoded price goes stale
+# silently and becomes an invented number. Add the models your adapters report
+# (the adapter's `model` field must match the key exactly), with rates copied
+# from your provider's current price list:
+#
+#   models:
+#     <model-name>:
+#       input_usd_per_million_tokens: <number>
+#       output_usd_per_million_tokens: <number>
+#
+# The worker reads this file at startup (AGENTFORGE_PRICING_FILE); restart the
+# worker after editing it.
+
+models:
+  # The example RAG app calls no model, so its cost really is zero.
+  local-deterministic:
+    input_usd_per_million_tokens: 0
+    output_usd_per_million_tokens: 0

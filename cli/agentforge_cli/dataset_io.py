@@ -56,6 +56,8 @@ def validate_dataset_file(path: Path) -> tuple[str, str | None, list[TestCaseIn]
                     case_key=case["id"],
                     input=case.get("input", ""),
                     expected_answer=case.get("expected_answer"),
+                    expected_answer_contains=case.get("expected_answer_contains") or [],
+                    expected_answer_regex=case.get("expected_answer_regex"),
                     expected_context=case.get("expected_context") or [],
                     tags=case.get("tags") or [],
                 )

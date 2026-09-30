@@ -1,15 +1,14 @@
-# AgentForge API. Runs in Linux containers only — see README for why the
-# CLI/adapters run natively on Windows while the API+DB stay in Docker.
+# AgentForge API. Runs in Linux containers only. It persists and serves data
+# and enqueues runs; it never executes adapters (that's the worker's job).
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Only the local packages the API actually needs at runtime (agentforge-core
-# for shared schemas). Evaluators/SDK/CLI run client-side, not in this image.
 COPY packages/core /app/packages/core
+COPY packages/evaluators /app/packages/evaluators
 COPY apps/api /app/apps/api
 
-RUN pip install --no-cache-dir -e /app/packages/core -e /app/apps/api
+RUN pip install --no-cache-dir -e /app/packages/core -e /app/packages/evaluators -e /app/apps/api
 
 WORKDIR /app/apps/api
 

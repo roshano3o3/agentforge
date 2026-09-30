@@ -309,6 +309,122 @@ details.evidence pre {
   margin-bottom: 28px;
 }
 
+.badge-running {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.badge-label {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.section-title {
+  font-size: 15px;
+  margin: 24px 0 8px;
+}
+
+.metric-chip {
+  border-left: 3px solid var(--border);
+  padding: 2px 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.metric-chip.metric-pass {
+  border-left-color: var(--pass);
+}
+
+.metric-chip.metric-fail {
+  border-left-color: var(--fail);
+}
+
+.metric-chip .verdict {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.metric-pass .verdict {
+  color: var(--pass);
+}
+
+.metric-fail .verdict {
+  color: var(--fail);
+}
+
+.metric-reason {
+  color: var(--muted);
+}
+
+.error-summary {
+  color: var(--error) !important;
+}
+
+.run-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 0 0 24px;
+}
+
+.run-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-form .wide {
+  grid-column: 1 / -1;
+}
+
+.run-form select,
+.run-form input[type="text"],
+.run-form input[type="number"] {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.run-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.run-form legend {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.run-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  color: var(--fg);
+}
+
+.run-form .publish-button {
+  margin: 0;
+}
+
 .version-block h3 {
   font-size: 14px;
   margin-bottom: 8px;

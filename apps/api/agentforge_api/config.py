@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTFORGE_", env_file=".env", extra="ignore")
 
     database_url: str = "sqlite+aiosqlite:///./agentforge_dev.db"
+    # Redis for the arq run queue. Compose publishes Redis on 127.0.0.1:6379
+    # only; inside the compose network the API/worker use redis://redis:6379.
+    redis_url: str = "redis://127.0.0.1:6379/0"
     sql_echo: bool = False
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 

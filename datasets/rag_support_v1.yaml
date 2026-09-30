@@ -10,8 +10,10 @@
 name: rag-support
 description: >
   Five test cases against the synthetic Northwind Outfitters policy corpus,
-  used to exercise the example RAG app and the heuristic_context_precision
-  evaluator end to end.
+  used to exercise the example RAG app and the evaluators end to end.
+  expected_answer_contains / expected_answer_regex state what a correct
+  answer must say; they were written from the policy text, not from the
+  example app's output.
 
 test_cases:
   - id: refund-policy-001
@@ -21,6 +23,7 @@ test_cases:
       per the Returns and Refunds Policy.
     expected_context:
       - policy-returns-001
+    expected_answer_contains: ["45 days"]
     tags: [policy, rag, returns]
 
   - id: shipping-time-001
@@ -30,6 +33,7 @@ test_cases:
       75 dollars, per the Shipping Policy.
     expected_context:
       - policy-shipping-002
+    expected_answer_contains: ["5 to 8 business days", "75 dollars"]
     tags: [policy, rag, shipping]
 
   - id: warranty-outerwear-001
@@ -39,6 +43,7 @@ test_cases:
       per the Product Warranty policy.
     expected_context:
       - policy-warranty-003
+    expected_answer_regex: '\b2[- ]year\b'
     tags: [policy, rag, warranty]
 
   - id: loyalty-points-return-001
@@ -57,4 +62,6 @@ test_cases:
       No policy document covers this; the correct behavior is to say the
       information isn't available rather than guessing.
     expected_context: []
+    # The correct behavior is to say so, not to guess.
+    expected_answer_regex: '(?i)could not find|not available|no information'
     tags: [policy, rag, out-of-scope]

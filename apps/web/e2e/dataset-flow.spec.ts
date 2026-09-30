@@ -20,10 +20,10 @@ function runCli(args: string[]) {
 test.beforeAll(() => {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
   // Seed one real, persisted evaluation run (via the real CLI, against the
-  // same fresh API instance this whole suite uses) so the Applications and
-  // Runs pages have real data to screenshot -- not just whatever this one
-  // test creates through the UI. The CLI's `dataset publish` itself now
-  // goes through the same draft-then-publish path the UI uses.
+  // same fresh API instance this whole suite uses; the CLI submits it and
+  // waits while the e2e worker container executes it) so the Applications
+  // and Runs pages have real data -- not just whatever this one test
+  // creates through the UI.
   runCli(["dataset", "publish", "datasets/rag_support_v1.yaml"]);
   runCli([
     "evaluate",
@@ -117,14 +117,13 @@ test("dataset version lifecycle through the UI: draft -> edit -> publish -> lock
     [1, "published"],
   ]);
 
-  // -- Runs page: the run seeded in beforeAll, with real persisted data --
+  // -- Runs page: the run the CLI submitted in beforeAll, executed by the worker --
   await page.goto("/runs");
   await expect(page.getByRole("heading", { name: "Evaluation runs" })).toBeVisible();
   const runLink = page.locator("table a.mono").first();
   await expect(runLink).toBeVisible();
-  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "runs.png"), fullPage: true });
 
   await runLink.click();
+  await expect(page.locator("h1 .badge", { hasText: "completed" })).toBeVisible();
   await expect(page.getByText("heuristic_context_precision", { exact: false }).first()).toBeVisible();
-  await page.screenshot({ path: path.join(SCREENSHOT_DIR, "run-detail.png"), fullPage: true });
 });

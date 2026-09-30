@@ -32,6 +32,22 @@ async def upsert_dataset(payload: DatasetCreate, session: AsyncSession = Depends
     return row
 
 
+_CASE_FIELDS = (
+    "input",
+    "expected_answer",
+    "expected_answer_contains",
+    "expected_answer_regex",
+    "expected_context",
+    "tags",
+)
+
+
+def _case_values(source: object) -> dict:
+    """The copyable content of a test case (a TestCaseIn or a TestCase row).
+    One list, so create / PATCH / new-draft can't drift on which fields they carry."""
+    return {name: getattr(source, name) for name in _CASE_FIELDS}
+
+
 async def _load_version_with_cases(version_id: str, session: AsyncSession) -> DatasetVersion:
     row = await session.scalar(
         select(DatasetVersion).options(selectinload(DatasetVersion.test_cases)).where(DatasetVersion.id == version_id)
@@ -67,21 +83,10 @@ async def _apply_test_cases(
     for tc in payload.test_cases:
         existing_tc = existing_by_key.get(tc.case_key)
         if existing_tc is not None:
-            existing_tc.input = tc.input
-            existing_tc.expected_answer = tc.expected_answer
-            existing_tc.expected_context = tc.expected_context
-            existing_tc.tags = tc.tags
+            for name, value in _case_values(tc).items():
+                setattr(existing_tc, name, value)
         else:
-            session.add(
-                TestCase(
-                    dataset_version_id=version_id,
-                    case_key=tc.case_key,
-                    input=tc.input,
-                    expected_answer=tc.expected_answer,
-                    expected_context=tc.expected_context,
-                    tags=tc.tags,
-                )
-            )
+            session.add(TestCase(dataset_version_id=version_id, case_key=tc.case_key, **_case_values(tc)))
 
 
 @router.post("/{dataset_id}/versions", response_model=DatasetVersionOut)
@@ -108,16 +113,7 @@ async def create_draft_version(
     await session.flush()
 
     for tc in payload.test_cases:
-        session.add(
-            TestCase(
-                dataset_version_id=version_row.id,
-                case_key=tc.case_key,
-                input=tc.input,
-                expected_answer=tc.expected_answer,
-                expected_context=tc.expected_context,
-                tags=tc.tags,
-            )
-        )
+        session.add(TestCase(dataset_version_id=version_row.id, case_key=tc.case_key, **_case_values(tc)))
 
     await session.commit()
     return await _load_version_with_cases(version_row.id, session)
@@ -238,16 +234,7 @@ async def new_draft_from_version(
     await session.flush()
 
     for tc in source.test_cases:
-        session.add(
-            TestCase(
-                dataset_version_id=new_row.id,
-                case_key=tc.case_key,
-                input=tc.input,
-                expected_answer=tc.expected_answer,
-                expected_context=tc.expected_context,
-                tags=tc.tags,
-            )
-        )
+        session.add(TestCase(dataset_version_id=new_row.id, case_key=tc.case_key, **_case_values(tc)))
 
     await session.commit()
     return await _load_version_with_cases(new_row.id, session)

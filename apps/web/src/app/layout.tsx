@@ -13,8 +13,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body>
         <Nav />
         <div className="env-banner">
-          Phase 1 local dev build — synthetic data, heuristic evaluator only, not for public
-          deployment.
+          Local dev build — no authentication, localhost only, not for public deployment. Example data is
+          synthetic; all evaluators are deterministic (no LLM judge).
         </div>
         {children}
       </body>

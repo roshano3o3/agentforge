@@ -6,15 +6,27 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agentforge}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentforge}
       POSTGRES_DB: ${POSTGRES_DB:-agentforge}
-    # Bound to localhost only -- this setup is not meant to be reachable
-    # from outside this machine. See README "Security / not for public
-    # deployment".
+    # Bound to localhost only -- there is no auth anywhere in AgentForge, so
+    # nothing may be reachable from outside this machine.
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - agentforge_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Localhost only, same reason as Postgres. The run queue lives in DB 0;
+    # the test suites use DBs 1 and 2 so they never share a queue with it.
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -26,11 +38,37 @@ services:
     restart: unless-stopped
     environment:
       AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
+      AGENTFORGE_REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Executes evaluation runs. The only place adapters and evaluators run;
+  # never started natively on Windows. No ports: it only talks to Redis and
+  # Postgres inside the compose network (and to HTTP adapters it's pointed at).
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
+      AGENTFORGE_REDIS_URL: redis://redis:6379/0
+    # Lets HTTP adapters reach a service on the host at host.docker.internal
+    # (automatic on Docker Desktop; this line makes it work on Linux too).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
 
 volumes:
   agentforge_postgres_data:

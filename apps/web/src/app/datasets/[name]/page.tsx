@@ -37,6 +37,10 @@ function toTestCaseInput(tc: TestCase): TestCaseInput {
     case_key: tc.case_key,
     input: tc.input,
     expected_answer: tc.expected_answer,
+    // Carried through unchanged: a draft PATCH replaces the whole case, so
+    // dropping these here would silently erase them.
+    expected_answer_contains: tc.expected_answer_contains,
+    expected_answer_regex: tc.expected_answer_regex,
     expected_context: tc.expected_context,
     tags: tc.tags,
   };
@@ -47,6 +51,8 @@ function formToTestCaseInput(f: DraftTestCaseForm): TestCaseInput {
     case_key: f.case_key,
     input: f.input,
     expected_answer: f.expected_answer.trim() || null,
+    expected_answer_contains: [],
+    expected_answer_regex: null,
     expected_context: splitList(f.expected_context),
     tags: splitList(f.tags),
   };

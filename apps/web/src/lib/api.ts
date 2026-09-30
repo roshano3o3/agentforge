@@ -5,10 +5,12 @@ import type {
   DatasetVersion,
   EvaluationRun,
   EvaluationRunSummary,
+  Evaluator,
+  RunCreateInput,
 } from "./types";
 
 // Overridable via NEXT_PUBLIC_API_URL for non-default setups; defaults to
-// the AgentForge API's localhost-only Phase 1 address.
+// the AgentForge API's localhost-only address.
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
@@ -68,6 +70,15 @@ export function getRun(runId: string): Promise<EvaluationRun> {
   return apiFetch<EvaluationRun>(`/runs/${runId}`);
 }
 
+/** Creates a *pending* run and queues it for the worker. Poll getRun for progress. */
+export function createRun(input: RunCreateInput): Promise<EvaluationRun> {
+  return post<EvaluationRun>("/runs", input);
+}
+
+export function listEvaluators(): Promise<Evaluator[]> {
+  return apiFetch<Evaluator[]>("/evaluators");
+}
+
 // -- applications ---------------------------------------------------------
 
 export function listApplications(): Promise<Application[]> {
@@ -116,6 +127,8 @@ export interface TestCaseInput {
   case_key: string;
   input: string;
   expected_answer: string | null;
+  expected_answer_contains: string[];
+  expected_answer_regex: string | null;
   expected_context: string[];
   tags: string[];
 }

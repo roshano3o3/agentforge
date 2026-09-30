@@ -26,6 +26,9 @@ Write-Host "Installing local packages (editable, in dependency order) ..."
 & $venvPython -m pip install --quiet -e "$RepoRoot\packages\evaluators"
 & $venvPython -m pip install --quiet -e "$RepoRoot\packages\sdk"
 & $venvPython -m pip install --quiet -e "$RepoRoot\apps\api[dev]"
+# Installed on the host only so the integration tests can call the worker's
+# run executor in-process. The worker *service* runs only in Docker.
+& $venvPython -m pip install --quiet -e "$RepoRoot\apps\worker"
 & $venvPython -m pip install --quiet -e "$RepoRoot\cli"
 & $venvPython -m pip install --quiet -e "$RepoRoot\examples\rag_app"
 

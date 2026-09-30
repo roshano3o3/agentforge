@@ -8,55 +8,56 @@ phase is a small, complete, honestly documented vertical slice.
 Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before changing things.
 
 ## Stack
-- API: FastAPI + SQLAlchemy 2 (async) + Alembic — `apps/api`
-- DB: Postgres via Docker Compose (intended); SQLite via `aiosqlite` (fallback, same code path),
-  selected by `AGENTFORGE_DATABASE_URL`
+- API: FastAPI + SQLAlchemy 2 (async) + Alembic — `apps/api` (run state machine: `services/runs.py`)
+- Worker: arq + Redis — `apps/worker` (`adapters.py` timeouts/capture, `runner.py` execution). Docker only.
+- DB: Postgres via Docker Compose; SQLite via `aiosqlite` is a fallback that can't execute runs
 - Web: Next.js dashboard — `apps/web` (Playwright e2e in `apps/web/e2e`)
 - CLI: Typer (`agentforge`) — `cli/`; shared Pydantic schemas — `packages/core`
-- Evaluators: `packages/evaluators` (only `heuristic_context_precision`); SDK: `packages/sdk`
-- Example app: `examples/rag_app` (synthetic "Northwind Outfitters", deterministic retriever)
+- Evaluators: `packages/evaluators` — `name@version` registry, 9 deterministic evaluators, aggregates
+- SDK: `packages/sdk` (adapter contract: python `module:fn` + http); pricing: `config/pricing.yaml`
+- Example app: `examples/rag_app` (synthetic "Northwind Outfitters"; also `fault_injection`, `http_server`)
 - Python 3.12, Node 18+
 
 ## Rules (non-negotiable)
 - **No invented metrics.** Every number shown in the CLI, dashboard, or docs comes from a real
-  persisted run or a real test execution. No fabricated scores, coverage %, or benchmarks.
-- **Label `local-deterministic` results as fixture-based.** They come from a synthetic app and
-  a deterministic heuristic, not a real model; never present them as model quality.
-- **Adapters are trusted local code**, imported and run in-process. Not a sandbox; don't claim isolation.
-- **Bind everything to localhost** (`127.0.0.1`): API, Postgres, dashboard default API URL.
+  persisted run or a real test execution. No fabricated scores, coverage %, benchmarks, or vendor prices.
+- **Label `local-deterministic` results as fixture-based.** Never present them as model quality,
+  and never call any evaluator an LLM judgment (none is). Cost is always labeled "estimated".
+- **Adapters are trusted local code**, run by the worker. Timeouts/capture contain bugs; not a sandbox.
+- **Bind everything to localhost** (`127.0.0.1`): API, Postgres, Redis, dashboard default API URL.
   There is no auth, so nothing may be exposed publicly.
-- **No fake auth.** Don't add placeholder logins, stub tokens, or "auth" that doesn't enforce anything.
-  Auth is either real or absent (and documented as absent).
+- **No fake auth.** Auth is either real or absent (and documented as absent).
 - Don't claim something works unless it was actually run. Mark unverified paths as unverified.
-- Immutability: published `DatasetVersion`s are frozen (service layer + DB trigger). Change
-  content only via `POST .../new-draft`. Runs may only target published versions.
+- Immutability: published `DatasetVersion`s and completed/failed runs (with their results and
+  metric scores) are frozen — service layer + DB triggers. Runs only target published versions.
+  Only the worker writes results; there is no client route for it.
 
 ## Windows notes
-- Dev machine is Windows. Use the PowerShell scripts in `scripts/`, not a Makefile or `just`:
-  `setup.ps1`, `db-migrate.ps1`, `dev-api.ps1`, `dev-web.ps1`, `seed-demo.ps1`,
-  `test.ps1` (Python), `test-ui.ps1` (Playwright), `docker-up.ps1` / `docker-down.ps1`.
-- **Workers (Phase 2+) run only inside Linux Docker containers**, never natively on Windows.
+- Use the PowerShell scripts in `scripts/`: `setup.ps1`, `docker-up.ps1`/`docker-down.ps1`,
+  `seed-demo.ps1`, `dev-web.ps1`, `test.ps1 [-Postgres]`, `test-ui.ps1` (always Docker).
+- **Workers run only inside Linux Docker containers**, never natively on Windows (tests call
+  the worker's `execute_run` in-process, which is fine; the worker *service* is Docker only).
+- Test isolation: Postgres DBs `agentforge_test` / `agentforge_e2e_test`, Redis DBs 1 / 2, and
+  dedicated worker containers; dev uses `agentforge` + Redis DB 0. Never point tests at dev.
 - Next.js dev server locks per project dir: stop `dev-web.ps1` before running `test-ui.ps1`.
-- Open the dashboard via `127.0.0.1` or `localhost` (both allowed in `next.config.ts`).
+- PowerShell 5.1: native stderr + `$ErrorActionPreference="Stop"` aborts when output is redirected —
+  relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
+  `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status
-- **Phase 1 done** (HEAD `3bf2d55` before this file): Applications / Datasets / Runs pages,
-  draft→published dataset versioning with DB-trigger immutability, CLI evaluation.
-- **Postgres/Docker path verified** (2026-09-30, Docker Desktop 29.8.1, postgres:16-alpine).
-  SQLite: 33 Python pass + 4 skipped, 1 Playwright pass. Postgres (`test.ps1 -Postgres`,
-  `test-ui.ps1 -Postgres`): 37 Python + 1 Playwright pass. The PL/pgSQL trigger blocks raw-SQL
-  UPDATE/INSERT/DELETE/un-publish on published versions (`tests/integration/test_db_triggers.py`).
-- `-Postgres` test DBs are `agentforge_test` / `agentforge_e2e_test`, built by Alembic (not
-  `create_all`, which has no triggers). Never point tests at the dev `agentforge` DB.
-- Windows PowerShell 5.1: native stderr + `$ErrorActionPreference="Stop"` aborts scripts when output
-  is redirected. Around docker/npm, relax to "Continue" and check `$LASTEXITCODE`.
+## Current status (2026-09-30)
+- **Phase 1 done**, Docker/Postgres verified.
+- **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
+  immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
+  Tests: SQLite 75 passed + 9 skipped; `test.ps1 -Postgres` 84 passed; `test-ui.ps1` 2 passed.
+- CI (`.github/workflows/ci.yml`) is written but **unverified**: no GitHub remote yet.
+- 4 pre-existing ESLint `react-hooks/set-state-in-effect` errors in applications/datasets pages.
 
 ## Phase plan
-1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done** (SQLite + Postgres verified)
-2. Evaluation engine: more RAG evaluators, worker + queue (Docker), evidence at scale
+1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done**
+2. Evaluation engine: evaluators, worker + queue (Docker), aggregates — **done**
 3. Agent trajectory evaluation, LangGraph example agent
 4. Regression engine, release policy, CI gate (`agentforge gate`)
 5. Safety / adversarial testing
 6. OpenTelemetry tracing, Trace Explorer
 7. Failure replay
-Then: remaining dashboard pages, CI/CD, reproducible benchmark.
+Then: remaining dashboard pages, reproducible benchmark.

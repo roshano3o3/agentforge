@@ -1,7 +1,7 @@
-# Architecture — Phase 1
+# Architecture — Phase 2 (evaluation engine)
 
 This describes what is actually built, not the eventual full system (see
-the root README's "What's next" for what later phases add).
+the root README's "What's next" for later phases).
 
 ## Component diagram
 
@@ -9,71 +9,90 @@ the root README's "What's next" for what later phases add).
 flowchart LR
     subgraph Windows_host [Windows, native]
         CLI[agentforge CLI]
-        RAG[examples/rag_app adapter\nin-process, trusted local code]
         WEB[Next.js dashboard\nnpm run dev]
-        CLI -->|calls in-process| RAG
     end
 
-    subgraph Linux_containers [Linux containers via Docker Compose]
+    subgraph Linux_containers [Linux containers via Docker Compose, all ports on 127.0.0.1]
         API[FastAPI]
         PG[(PostgreSQL)]
+        REDIS[(Redis\narq queue)]
+        WORKER[arq worker\nadapters + evaluators]
         API --> PG
+        API -->|enqueue run id| REDIS
+        REDIS -->|job| WORKER
+        WORKER -->|results, metric scores,\naggregates, status| PG
     end
 
-    CLI -->|HTTP, localhost only| API
-    WEB -->|HTTP GET, localhost only| API
+    CLI -->|HTTP: create run, poll| API
+    WEB -->|HTTP: create run, poll| API
+    WORKER -.->|http adapter: POST| EXT[application under test\ne.g. host.docker.internal]
 ```
 
-There is no queue and no worker in Phase 1. The CLI executes the adapter
-and the one deterministic evaluator synchronously, in-process, then POSTs
-the finished results to the API for persistence. The API's only job in
-Phase 1 is persistence and read serving — it does not execute adapters or
-evaluators itself.
+The API never executes adapters or evaluators; it validates, persists, and
+enqueues. The worker is the **only** place an adapter or evaluator runs, and
+it runs only in a Linux container -- never natively on Windows (a standing
+project constraint). The CLI and dashboard only talk HTTP to the API.
 
-A future worker (Phase 2+) is explicitly required to run inside a Linux
-Docker container, never natively on Windows — this is a standing constraint
-for this project, not just a Phase 1 detail.
-
-## Why execution and persistence are split
-
-Evaluation *execution* (running the adapter, scoring it) happens whichever
-process the adapter's code lives in — here, the CLI, in-process, on
-Windows. *Persistence* is centralized in the API so results, dataset
-versions, and evaluator versions are recorded consistently regardless of
-what executed them. This split is what lets a future worker replace "the
-CLI runs the evaluator synchronously" with "a queue consumer runs it
-asynchronously" without changing the API or the data model at all.
-
-## Evaluation run lifecycle (Phase 1)
+## Run lifecycle and state machine
 
 ```
-1. agentforge dataset publish <file>.yaml
-     -> POST /datasets (upsert by name)
-     -> POST /datasets/{id}/versions          (creates a new DRAFT version)
-     -> POST /datasets/{name}/versions/{v}/publish  (freezes it)
-     One CLI command, two API calls -- same draft-then-publish path the UI uses.
+POST /runs  (CLI `agentforge evaluate`, or the dashboard's "New run" form)
+  -> validate: app + version exist, dataset version exists and is PUBLISHED (400 if draft),
+     adapter spec well-formed (422), every evaluator resolvable (400)
+  -> pin evaluators to name@version, INSERT run status=pending, commit
+  -> enqueue arq job "execute_run" with _job_id = "run:<id>"   (duplicate enqueue = no-op)
+       Redis unreachable -> run -> failed ("not executed: ..."), respond 503
+  -> 202 + the pending run
 
-2. agentforge evaluate --app ... --dataset ... --adapter module:function
-     -> POST /applications (upsert)              get-or-create by name
-     -> POST /applications/{id}/versions (upsert) get-or-create by (app, version)
-     -> GET  /datasets/{name}/versions/{version|latest}
-     -> POST /runs                                status=running
-     -> [in the CLI process, per test case:]
-          adapter(input) -> (answer, retrieved_doc_ids)
-          heuristic_context_precision(retrieved, expected) -> score, evidence
-     -> POST /runs/{id}/results   (bulk)
-     -> POST /runs/{id}/complete  (status=completed, or failed on fatal error)
+worker: execute_run(run_id)            apps/worker/agentforge_worker/runner.py
+  completed/failed already?  -> no-op (re-delivered job)
+  pending                    -> running (started_at)
+  running (previous attempt died) -> delete partial results, start over
+  build adapter + resolve pinned evaluators    (failure -> failed, with reason)
+  for each test case (sorted by case_key, sequentially):
+      invoke adapter with per-case timeout            apps/worker/agentforge_worker/adapters.py
+        ok      -> run every evaluator (an evaluator that raises = a failed metric, not a crash)
+        timeout -> status "timeout", no scores
+        error   -> status "error", exception type + message + traceback, no scores
+      commit the EvaluationResult + its MetricScores   (live progress for pollers)
+  compute aggregates from the persisted rows, store them, -> completed (completed_at)
+  CancelledError (arq job timeout / shutdown) -> failed ("worker stopped or job timed out mid-run")
+  any other infrastructure error              -> failed ("worker error: ...")
 
-3. Dashboard "Runs" page
-     -> GET /runs           (list, with computed aggregates)
-     -> GET /runs/{id}      (detail, with all results + evidence)
+GET /runs, GET /runs/{id}  -> status, progress (results so far / total cases),
+                              stored aggregates, per-case results with every metric
 ```
 
-## Domain model (Phase 1 subset)
+`pending -> running -> completed | failed` and `pending -> failed` are the
+only transitions (`services/runs.py::transition`). completed and failed are
+terminal.
 
-Only the entities this vertical slice needs — see the root README's "What's
-next" for the rest of the eventual model (Project, Evaluator registry,
-Trace/Span, Baseline, ReleasePolicy, etc., none of which exist yet).
+**Why results are committed before the final status change:** once a run is
+completed, the DB trigger refuses result writes. SQLAlchemy's unit of work
+would flush the parent row's UPDATE *before* child INSERTs in the same
+flush, so writing the last results and flipping the status in one commit
+would be rejected by the trigger. Each case is committed on its own; the
+status flip is a separate, last commit.
+
+### Fault containment in the worker
+
+- **Sync Python adapters** run in a fresh daemon thread per case, awaited
+  with `asyncio.wait_for(timeout)`. A fresh thread per case means one hung
+  case can't delay the next case's timer (a shared thread pool would). The
+  hung thread itself can't be killed -- Python has no thread cancellation --
+  so it runs on in the background and its late result is discarded.
+- **Async Python adapters** are awaited with `wait_for` and genuinely
+  cancelled on timeout.
+- **HTTP adapters** get an httpx timeout plus the same `wait_for`; non-2xx
+  and non-JSON responses are errors.
+- `BaseException` from an adapter (e.g. `SystemExit`) is captured too; only
+  `asyncio.CancelledError` (the worker itself being cancelled) propagates.
+- Outputs are validated (`coerce_output`): an `AdapterOutput`, a dict with
+  its fields, or a bare answer string; anything else is an error result.
+
+This is containment of *bugs* in trusted local code, not a sandbox.
+
+## Domain model
 
 ```mermaid
 erDiagram
@@ -83,44 +102,54 @@ erDiagram
     Application ||--o{ EvaluationRun : evaluated
     ApplicationVersion ||--o{ EvaluationRun : "pinned to"
     DatasetVersion ||--o{ EvaluationRun : "pinned to (published only)"
-    EvaluationRun ||--o{ EvaluationResult : produces
+    EvaluationRun ||--o{ EvaluationResult : "one per test case"
     TestCase ||--o{ EvaluationResult : "scored per"
+    EvaluationResult ||--o{ MetricScore : "one per evaluator"
 ```
 
-Immutability, concretely:
+- `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
+  adapter type/target, timeout, latency budget, threshold, provider type,
+  environment, git commit, error message, stored `aggregates` (JSON),
+  created/started/completed timestamps.
+- `EvaluationResult`: the adapter's answer, retrieved doc IDs, citations,
+  reported tokens and model, latency, status (`ok`/`error`/`timeout`),
+  error type/message, and the case-level `passed` verdict.
+- `MetricScore`: evaluator name + version, 0..1 `score` and/or measured
+  `value` + `unit`, `passed` (null = not applicable / no budget), `reason`,
+  `evidence`, `labels` (`fixture-based` for local-deterministic runs,
+  `estimated` for cost).
 
-- `DatasetVersion` is a two-state object: `draft` (mutable) or `published`
-  (frozen forever). `status` only ever moves one direction, via `POST
-  .../publish`. While a version is a draft, its `TestCase` rows can be
-  inserted/updated/deleted (`PATCH .../versions/{version}`, diffed by
-  `case_key` against the request body — see `apps/api/agentforge_api/routers/datasets.py`).
-  Once published, that same `PATCH` route returns `409 Conflict` for that
-  version, and a **DB trigger blocks the mutation independent of the API**
-  (a real Postgres trigger function + real SQLite triggers, not a comment —
-  see the `dataset_version_immutability` migration,
-  `apps/api/alembic/versions/b17cf04aecaf_*.py`). "Editing" a published
-  version's content means `POST .../new-draft`: copy its test cases into a
-  brand-new draft (next version number), edit that, publish it.
-- `EvaluationRun` may only target a **published** `DatasetVersion`
-  (`POST /runs` returns `400` for a draft) — this is what makes a run's
-  dataset reference actually reproducible: it can never change under it.
-  Once `status` leaves `running` (via `POST /runs/{id}/complete`), no route
-  accepts further `POST /runs/{id}/results` for it (`409 Conflict`). There
-  is no update route for a run's own fields at all.
-- `EvaluationResult`: inserted once, in the results-submission bulk write;
-  never updated.
+### Immutability, and how each guarantee is enforced
 
-Enforced in `tests/integration/test_dataset_immutability.py` and
-`tests/integration/test_evaluation_persistence.py`, not just asserted here.
+| Guarantee | Service layer | Database (independent of the app) |
+|---|---|---|
+| Published dataset version's test cases never change | `PATCH` → `409` | trigger blocks INSERT/UPDATE/DELETE on its `test_cases` |
+| Published version never goes back to draft | no route does it | trigger blocks the status change |
+| A run only targets a published dataset version | `POST /runs` → `400` | -- |
+| A completed/failed run never changes | `transition()` refuses; no update route | trigger blocks UPDATE/DELETE of the run row |
+| Its results / metric scores never change | `assert_accepts_results()`; no client write route at all | triggers block INSERT/UPDATE/DELETE on `evaluation_results` and `metric_scores` |
+
+Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
+SQLite (migrations `b17cf04aecaf` and `c4e2a91d7b3f`). Tested with raw SQL
+in `tests/integration/test_db_triggers.py` (Postgres mode) and checked by
+hand against the Docker dev DB. The Phase 2 migration uses only native
+`ALTER TABLE` (no Alembic batch mode): a SQLite batch rebuild of
+`test_cases` would silently drop its immutability triggers.
+
+**Phase 1 data** is carried over by the migration: each Phase 1 result's
+score/evidence becomes a `heuristic_context_precision@1.0.0` metric row
+(labeled fixture-based when the run was local-deterministic); a Phase 1 run
+stuck in `running` (the CLI died mid-run) is marked failed, since no worker
+will ever pick it up. Phase 1 runs have no stored aggregates, so the API
+computes them on read with the same function the worker uses.
 
 ## Reproducibility metadata recorded per run
 
-`application_version`, `dataset_version` (immutable, so the exact test
-cases are always recoverable), `evaluator_name` + `evaluator_version`,
-`provider_type` (`local-deterministic` in Phase 1), `environment`,
-`threshold`, and `git_commit_sha` (best-effort — `git rev-parse HEAD` in the
-CLI's working directory at evaluate time; `null` if not run inside a git
-repo).
+Application version, dataset version (immutable), pinned evaluator
+versions, adapter type + target, per-case timeout, threshold, latency
+budget, provider type, environment, and `git_commit_sha` (best-effort `git
+rev-parse HEAD` where the CLI runs; null outside a git repo or when the run
+was started from the dashboard).
 
 ## Local dev database: SQLite vs. Postgres
 
@@ -236,13 +265,15 @@ browser.
 
 ## Frontend testing: Playwright, and a real bug it found
 
-`apps/web/e2e/dataset-flow.spec.ts` (Playwright + Chromium) drives the
-actual UI in a real browser — distinct from `tests/e2e/` at the repo root,
-which is CLI-subprocess-only and never touches a browser. Playwright starts
-its own API (fresh temp SQLite, or with `test-ui.ps1 -Postgres` a freshly
-recreated, Alembic-migrated Postgres DB; `apps/api/scripts/serve_fresh.py`) and web
-server on dedicated ports (8010/3010) so it never collides with a manually
-running dev setup.
+`apps/web/e2e/` (Playwright + Chromium) drives the actual UI in a real
+browser: `dataset-flow.spec.ts` (dataset lifecycle) and `run-flow.spec.ts`
+(start a run from the UI, follow it to completed). Playwright starts its
+own API (`apps/api/scripts/serve_fresh.py`, Alembic-migrated, against a
+freshly recreated `agentforge_e2e_test` Postgres DB and Redis DB 2) and web
+server on dedicated ports (8010/3010); `test-ui.ps1` runs a dedicated worker
+container on that queue. Phase 1 also had a SQLite mode for this suite; it
+was dropped in Phase 2 because runs now need the Docker worker, which can't
+use a SQLite file on the Windows host.
 
 Building this test surfaced a real, previously-unknown bug: Next.js 16
 blocks cross-origin requests to dev-only resources (JS chunks, HMR
@@ -268,9 +299,10 @@ Two more operational findings from getting this running:
   "Another next dev server is already running," even though they use
   different ports.
 
-## Not implemented in Phase 1
 
-Queue/worker, release policy engine and gate, replay, trace/span
-persistence, agent trajectory evaluation, safety/adversarial testing,
-model comparison, RAG evaluators beyond the one heuristic, Regression/Trace
-Explorer/Safety dashboard pages, authentication. See the root README.
+## Not implemented yet
+
+Release policy engine and gate, regression comparison, replay, trace/span
+persistence, agent trajectory evaluation, safety/adversarial testing, model
+comparison, LLM-as-judge evaluators, Regression/Trace Explorer/Safety
+dashboard pages, authentication. See the root README.

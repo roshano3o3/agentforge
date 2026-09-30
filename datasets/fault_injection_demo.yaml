@@ -1,0 +1,31 @@
+# Demonstrates fault containment: evaluate this with the fault-injection
+# adapter and a short per-case timeout, e.g.
+#
+#   agentforge evaluate --app fault-demo --app-version v1 --dataset fault-injection-demo \
+#     --adapter rag_app.fault_injection:answer --timeout 1
+#
+# One case answers normally, one hangs past the timeout, one raises, one
+# calls sys.exit, one returns a malformed output. The run still completes,
+# with each bad case recorded as an error/timeout result. Test fixture only.
+name: fault-injection-demo
+description: >
+  Fault-containment demo for the worker: one good case plus a timeout, a
+  crash, a sys.exit, and a malformed output (rag_app.fault_injection).
+
+test_cases:
+  - id: good-case
+    input: "Do you offer a warranty on outerwear jackets?"
+    expected_context: [policy-warranty-003]
+    expected_answer_regex: '\b2[- ]year\b'
+  - id: hangs-past-timeout
+    input: "[[sleep:5]] Do you offer a warranty on outerwear jackets?"
+    expected_context: [policy-warranty-003]
+  - id: raises-exception
+    input: "[[crash]] What is the return window?"
+    expected_context: [policy-returns-001]
+  - id: calls-sys-exit
+    input: "[[exit]] What is the return window?"
+    expected_context: [policy-returns-001]
+  - id: malformed-output
+    input: "[[bad-output]] What is the return window?"
+    expected_context: [policy-returns-001]

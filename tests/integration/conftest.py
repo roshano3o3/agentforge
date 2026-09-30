@@ -20,6 +20,7 @@ from sqlalchemy.pool import NullPool, StaticPool
 
 from agentforge_api.db.base import Base, get_session
 from agentforge_api.main import app
+from agentforge_api.queue import QueueUnavailableError, get_run_queue
 
 
 @pytest_asyncio.fixture
@@ -42,13 +43,36 @@ async def session_factory(test_db_url: str | None) -> AsyncIterator[async_sessio
         await engine.dispose()
 
 
+class RecordingQueue:
+    """Stands in for Redis/arq: records which runs the API enqueued (tests
+    then execute them by calling the worker's execute_run directly), or
+    fails like an unreachable Redis when `fail_with` is set."""
+
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
+        self.fail_with: str | None = None
+
+    async def enqueue_run(self, run_id: str) -> None:
+        if self.fail_with:
+            raise QueueUnavailableError(self.fail_with)
+        self.enqueued.append(run_id)
+
+
+@pytest.fixture
+def queue() -> RecordingQueue:
+    return RecordingQueue()
+
+
 @pytest_asyncio.fixture
-async def client(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncClient]:
+async def client(
+    session_factory: async_sessionmaker[AsyncSession], queue: RecordingQueue
+) -> AsyncIterator[AsyncClient]:
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_run_queue] = lambda: queue
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

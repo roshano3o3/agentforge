@@ -76,6 +76,8 @@ class TestCase(Base):
     case_key: Mapped[str] = mapped_column(String(200), nullable=False)
     input: Mapped[str] = mapped_column(String, nullable=False)
     expected_answer: Mapped[str | None] = mapped_column(String, nullable=True)
+    expected_answer_contains: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    expected_answer_regex: Mapped[str | None] = mapped_column(String, nullable=True)
     expected_context: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
 

@@ -12,6 +12,25 @@ from typing import Any
 import httpx
 
 
+class ApiError(Exception):
+    """A non-2xx API response, with the server's `detail` message."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"{status_code}: {detail}")
+        self.status_code = status_code
+        self.detail = detail
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    if response.is_success:
+        return
+    try:
+        detail = response.json().get("detail", response.text)
+    except ValueError:
+        detail = response.text
+    raise ApiError(response.status_code, str(detail))
+
+
 class AgentForgeClient:
     def __init__(self, base_url: str = "http://localhost:8000", timeout: float = 30.0) -> None:
         self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout)
@@ -29,7 +48,7 @@ class AgentForgeClient:
 
     def upsert_application(self, name: str, description: str | None = None) -> dict[str, Any]:
         resp = self._client.post("/applications", json={"name": name, "description": description})
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def upsert_application_version(
@@ -39,14 +58,14 @@ class AgentForgeClient:
             f"/applications/{application_id}/versions",
             json={"version": version, "description": description},
         )
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     # -- datasets ---------------------------------------------------------
 
     def upsert_dataset(self, name: str, description: str | None = None) -> dict[str, Any]:
         resp = self._client.post("/datasets", json={"name": name, "description": description})
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def create_draft_version(self, dataset_id: str, test_cases: list[dict[str, Any]]) -> dict[str, Any]:
@@ -54,42 +73,40 @@ class AgentForgeClient:
         Does not publish it -- call `publish_dataset_version` for that.
         """
         resp = self._client.post(f"/datasets/{dataset_id}/versions", json={"test_cases": test_cases})
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def publish_dataset_version(self, dataset_name: str, version: int) -> dict[str, Any]:
         resp = self._client.post(f"/datasets/{dataset_name}/versions/{version}/publish")
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def get_dataset_version(self, dataset_name: str, version: int | str = "latest") -> dict[str, Any]:
         resp = self._client.get(f"/datasets/{dataset_name}/versions/{version}")
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     # -- runs ---------------------------------------------------------------
 
     def create_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Creates a *pending* run and queues it for the worker (HTTP 202).
+        Results are produced by the worker -- poll `get_run` until the status
+        is `completed` or `failed`."""
         resp = self._client.post("/runs", json=payload)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
-    def submit_results(self, run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
-        resp = self._client.post(f"/runs/{run_id}/results", json={"results": results})
-        resp.raise_for_status()
-        return resp.json()
-
-    def complete_run(self, run_id: str, status: str = "completed") -> dict[str, Any]:
-        resp = self._client.post(f"/runs/{run_id}/complete", json={"status": status})
-        resp.raise_for_status()
+    def list_evaluators(self) -> list[dict[str, Any]]:
+        resp = self._client.get("/evaluators")
+        _raise_for_status(resp)
         return resp.json()
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         resp = self._client.get(f"/runs/{run_id}")
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def list_runs(self) -> list[dict[str, Any]]:
         resp = self._client.get("/runs")
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()

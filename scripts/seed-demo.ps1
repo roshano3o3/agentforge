@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-  Publish the example dataset and run the 5-case evaluation against the
-  example RAG app. Assumes the API is already running (dev-api.ps1 or
-  docker compose) at the given URL.
+  Publish the example dataset and submit a 5-case evaluation of the example
+  RAG app, waiting for the worker to finish it. Needs the Docker stack
+  (docker-up.ps1): the API at the given URL plus Redis and the worker --
+  the run is executed by the worker container, not by this script.
 #>
 param(
     [string]$ApiUrl = "http://127.0.0.1:8000"

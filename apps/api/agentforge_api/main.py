@@ -4,14 +4,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agentforge_api.config import get_settings
-from agentforge_api.routers import applications, datasets, runs
+from agentforge_api.routers import applications, datasets, evaluators, runs
 
 settings = get_settings()
 
 app = FastAPI(
     title="AgentForge API",
-    version="0.1.0",
-    description="Phase 1 vertical slice: applications, immutable datasets, evaluation runs.",
+    version="0.2.0",
+    description=(
+        "Applications, immutable datasets, and evaluation runs. Runs are created here and "
+        "executed by the arq worker (Docker only); the API never executes adapters itself."
+    ),
 )
 
 app.add_middleware(
@@ -23,6 +26,7 @@ app.add_middleware(
 
 app.include_router(applications.router)
 app.include_router(datasets.router)
+app.include_router(evaluators.router)
 app.include_router(runs.router)
 
 
