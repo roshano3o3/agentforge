@@ -17,7 +17,7 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - **CLI** (`agentforge evaluate`) submits a run through the API and polls until it finishes; nothing executes in the CLI process.
 - **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. Loading, empty, error, pending, running and failed states are all real. Regression / Trace Explorer / Safety are still disabled nav links, because none of them exists yet.
 - **Tests:** 86 automated — 84 Python (unit per evaluator, integration run lifecycle incl. timing-out and crashing cases, raw-SQL trigger tests, CLI → API → Redis → Docker worker end-to-end) and 2 Playwright browser tests (one starts a run from the UI and waits for the worker's completed results). See [Testing](#testing).
-- **CI:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the Python suite against Postgres + Redis service containers with the worker as a container, on every push. **Not yet run on GitHub** — the repository has no remote yet.
+- **CI:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the Python suite against Postgres + Redis service containers with the worker as a container, on every push and pull request. First run on GitHub (commit `d8851e0`): passed — [run 36768047667](https://github.com/roshano3o3/agentforge/actions/runs/36768047667).
 
 Everything in the CLI output and the dashboard comes from real, persisted rows. Nothing is hardcoded.
 
@@ -132,7 +132,7 @@ Last run in this environment (Python 3.12.7, Windows 11, Docker Desktop 29.8.1, 
 | `test.ps1` (SQLite) | 75 passed, 9 skipped (7 trigger tests, 2 worker e2e tests) |
 | `test.ps1 -Postgres` | 84 passed |
 | `test-ui.ps1` | 2 passed |
-| CI workflow | not yet run (no GitHub remote) |
+| CI workflow (GitHub Actions, ubuntu) | passed on `d8851e0`: Postgres + worker-container step and SQLite step |
 
 The Phase 2 migration was also checked by hand on both engines against Phase 1-shaped data (a scored run and a stuck `running` run): upgrade carried the scores over as `heuristic_context_precision@1.0.0` metric rows labeled fixture-based and marked the stuck run failed; all new triggers blocked; the dataset triggers survived; downgrade → upgrade round-tripped. No coverage percentage is claimed because none has been measured.
 
@@ -169,7 +169,7 @@ Read this before assuming a feature exists.
 - **Token counts and model names are only what the adapter reports**; cost is only an estimate, and only for models listed in `config/pricing.yaml` (which ships with none but the $0 fixture).
 - **Case pass/fail is strict**: any failing evaluator fails the case. There is no per-evaluator weighting or gate policy yet (Phase 4).
 - **No-Docker (SQLite) mode can't execute runs** (see Quick start). The SQLite path remains for the API, datasets, and the in-process test suite.
-- **The whole stack is verified on one Windows machine only.** The CI workflow exists but hasn't run on GitHub yet.
+- **The full stack incl. the browser suite is verified on one Windows machine only.** CI (Linux) runs the Python suite only — no Playwright in CI yet.
 - **No release gate, regression comparison, safety/adversarial testing, trace persistence, or agent trajectory evaluation** — later phases.
 - **A known SQLite-only quirk:** timestamps re-read from SQLite can lose their UTC-offset suffix (same instant). Postgres doesn't.
 - **A draft PATCH replaces the entire test-case set**, not a partial merge.

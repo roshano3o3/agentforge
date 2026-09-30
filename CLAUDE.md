@@ -49,7 +49,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
   Tests: SQLite 75 passed + 9 skipped; `test.ps1 -Postgres` 84 passed; `test-ui.ps1` 2 passed.
-- CI (`.github/workflows/ci.yml`) is written but **unverified**: no GitHub remote yet.
+- Repo: https://github.com/roshano3o3/agentforge (public). CI (`.github/workflows/ci.yml`, Python suite
+  only) passed on its first run, commit `d8851e0`.
 - 4 pre-existing ESLint `react-hooks/set-state-in-effect` errors in applications/datasets pages.
 
 ## Phase plan
