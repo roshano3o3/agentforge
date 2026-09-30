@@ -12,11 +12,17 @@ description: >
   Fault-containment demo for the worker: one good case plus a timeout, a
   crash, a sys.exit, and a malformed output (rag_app.fault_injection).
 
+defaults:
+  evaluators:
+    heuristic_context_precision: {}
+    latency: {}
+
 test_cases:
   - id: good-case
     input: "Do you offer a warranty on outerwear jackets?"
     expected_context: [policy-warranty-003]
-    expected_answer_regex: '\b2[- ]year\b'
+    evaluators:
+      answer_regex: {pattern: '\b2[- ]year\b'}
   - id: hangs-past-timeout
     input: "[[sleep:5]] Do you offer a warranty on outerwear jackets?"
     expected_context: [policy-warranty-003]

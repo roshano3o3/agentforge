@@ -17,7 +17,7 @@ class Application(Base):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    versions: Mapped[list["ApplicationVersion"]] = relationship(
+    versions: Mapped[list[ApplicationVersion]] = relationship(
         back_populates="application", cascade="all, delete-orphan"
     )
 
@@ -32,4 +32,4 @@ class ApplicationVersion(Base):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    application: Mapped["Application"] = relationship(back_populates="versions")
+    application: Mapped[Application] = relationship(back_populates="versions")

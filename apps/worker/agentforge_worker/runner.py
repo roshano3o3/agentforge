@@ -15,8 +15,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from typing import Any
 
-from agentforge_api.models.dataset import TestCase
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from agentforge_api.models.dataset import DatasetVersion, TestCase
 from agentforge_api.models.evaluation import (
     TERMINAL_STATUSES,
     EvaluationResult,
@@ -33,25 +37,61 @@ from agentforge_evaluators import (
     MetricOutcome,
     ModelPrice,
     compute_aggregates,
+    effective_config,
     resolve,
 )
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from agentforge_worker.adapters import AdapterLoadError, CaseOutcome, build_adapter, invoke
 
 log = logging.getLogger("agentforge.worker")
 
 
+class PinnedEvaluators:
+    """Maps a case config key to the evaluator version this run pinned:
+    `name@version` must be pinned exactly; a bare `name` uses the run's
+    pinned version of it. Keys the run didn't pin (filtered out by an
+    explicit --evaluators list) resolve to None and are skipped."""
+
+    def __init__(self, keys: list[str]) -> None:
+        self.keys = list(keys)
+        self._by_key = {key: resolve(key) for key in keys}
+        self._by_name: dict[str, EvaluatorSpec] = {}
+        for spec in sorted(self._by_key.values(), key=lambda s: s.version):
+            self._by_name[spec.name] = spec
+
+    def lookup(self, key: str) -> EvaluatorSpec | None:
+        return self._by_key.get(key) if "@" in key else self._by_name.get(key)
+
+
+def case_evaluators(
+    pinned: PinnedEvaluators, default: Mapping[str, Any] | None, tc: TestCase
+) -> list[tuple[EvaluatorSpec, dict[str, Any]]]:
+    """The (evaluator, params) pairs that apply to this case -- only those."""
+    config = effective_config(default, tc.evaluators, pinned.keys)
+    # Phase 2 legacy fields on versions published before per-case config:
+    # supply them as the params they always were. The stored rows are untouched.
+    for key, params in config.items():
+        name = key.partition("@")[0]
+        if name == "answer_contains" and "phrases" not in params and tc.expected_answer_contains:
+            params["phrases"] = list(tc.expected_answer_contains)
+        if name == "answer_regex" and "pattern" not in params and tc.expected_answer_regex:
+            params["pattern"] = tc.expected_answer_regex
+    applied = []
+    for key, params in config.items():
+        spec = pinned.lookup(key)
+        if spec is not None:
+            applied.append((spec, params))
+    return applied
+
+
 def score_case(
-    specs: list[EvaluatorSpec], case: EvalInput, config: EvalConfig
+    evaluators: list[tuple[EvaluatorSpec, dict[str, Any]]], case: EvalInput, config: EvalConfig
 ) -> list[tuple[EvaluatorSpec, MetricOutcome]]:
-    """Run every evaluator; an evaluator that raises is recorded as a failed
-    metric for this case, never propagated."""
+    """Run each configured evaluator with its params; an evaluator that raises
+    is recorded as a failed metric for this case, never propagated."""
     scored = []
-    for spec in specs:
+    for spec, params in evaluators:
         try:
-            outcome = spec.fn(case, config)
+            outcome = spec.fn(case, config, params)
         except Exception as exc:  # noqa: BLE001
             outcome = MetricOutcome(
                 score=None,
@@ -60,6 +100,8 @@ def score_case(
                 evidence={"error_type": type(exc).__name__},
                 labels=["evaluator-error"],
             )
+        if params:
+            outcome.evidence = {**outcome.evidence, "params": params}
         scored.append((spec, outcome))
     return scored
 
@@ -70,8 +112,6 @@ def _eval_input(tc: TestCase, outcome: CaseOutcome) -> EvalInput:
     return EvalInput(
         input=tc.input,
         expected_answer=tc.expected_answer,
-        expected_answer_contains=list(tc.expected_answer_contains or []),
-        expected_answer_regex=tc.expected_answer_regex,
         expected_context=list(tc.expected_context or []),
         answer=out.answer,
         retrieved_doc_ids=out.retrieved_doc_ids,
@@ -111,11 +151,16 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], run_id: str)
 
         cases = list(
             await session.scalars(
-                select(TestCase).where(TestCase.dataset_version_id == run.dataset_version_id).order_by(TestCase.case_key)
+                select(TestCase)
+                .where(TestCase.dataset_version_id == run.dataset_version_id)
+                .order_by(TestCase.case_key)
             )
         )
+        version = await session.get(DatasetVersion, run.dataset_version_id)
+        assert version is not None
         return {
             "cases": cases,
+            "default_evaluators": version.default_evaluators,
             "evaluators": list(run.evaluators),
             "adapter_type": run.adapter_type,
             "adapter_target": run.adapter_target,
@@ -196,7 +241,7 @@ async def execute_run(
         if started is None:
             return "skipped"
         try:
-            specs = [resolve(key) for key in started["evaluators"]]
+            pinned = PinnedEvaluators(started["evaluators"])
             adapter = build_adapter(started["adapter_type"], started["adapter_target"])
         except (AdapterLoadError, ValueError) as exc:
             await _fail(session_factory, run_id, f"run setup failed: {exc}")
@@ -208,7 +253,13 @@ async def execute_run(
         try:
             for tc in started["cases"]:
                 outcome = await invoke(adapter, tc.input, tc.case_key, started["timeout"])
-                scored = score_case(specs, _eval_input(tc, outcome), config) if outcome.status == "ok" else []
+                scored = (
+                    score_case(
+                        case_evaluators(pinned, started["default_evaluators"], tc), _eval_input(tc, outcome), config
+                    )
+                    if outcome.status == "ok"
+                    else []
+                )
                 await _record(session_factory, run_id, tc, outcome, scored, started["labels"])
                 log.info("run %s case %s -> %s (%.0f ms)", run_id, tc.case_key, outcome.status, outcome.latency_ms)
         finally:

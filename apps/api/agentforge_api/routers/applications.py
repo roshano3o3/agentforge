@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from agentforge_core.schemas import (
-    ApplicationCreate,
-    ApplicationOut,
-    ApplicationVersionCreate,
-    ApplicationVersionOut,
-)
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.application import Application, ApplicationVersion
+from agentforge_core.schemas import (
+    ApplicationCreate,
+    ApplicationOut,
+    ApplicationVersionCreate,
+    ApplicationVersionOut,
+)
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -23,9 +23,7 @@ async def list_applications(session: AsyncSession = Depends(get_session)) -> lis
 
 
 @router.post("", response_model=ApplicationOut)
-async def upsert_application(
-    payload: ApplicationCreate, session: AsyncSession = Depends(get_session)
-) -> Application:
+async def upsert_application(payload: ApplicationCreate, session: AsyncSession = Depends(get_session)) -> Application:
     """Get-or-create by name. Idempotent so the CLI can call this on every
     `evaluate` invocation without needing a separate "does it exist" check.
     """
@@ -66,9 +64,7 @@ async def upsert_application_version(
     if existing:
         return existing
 
-    row = ApplicationVersion(
-        application_id=application_id, version=payload.version, description=payload.description
-    )
+    row = ApplicationVersion(application_id=application_id, version=payload.version, description=payload.description)
     session.add(row)
     await session.commit()
     await session.refresh(row)

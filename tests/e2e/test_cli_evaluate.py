@@ -123,8 +123,20 @@ def _run_cli(args: list[str], timeout: float = 180) -> subprocess.CompletedProce
 
 def _evaluate(api: str, *extra: str) -> subprocess.CompletedProcess[str]:
     return _run_cli(
-        ["evaluate", "--app", "rag-assistant", "--app-version", "v1", "--api-url", api,
-         "--poll-interval", "0.5", "--wait-timeout", "120", *extra]
+        [
+            "evaluate",
+            "--app",
+            "rag-assistant",
+            "--app-version",
+            "v1",
+            "--api-url",
+            api,
+            "--poll-interval",
+            "0.5",
+            "--wait-timeout",
+            "120",
+            *extra,
+        ]
     )
 
 
@@ -146,15 +158,47 @@ def test_cli_evaluation_is_executed_by_the_docker_worker(worker_api: str) -> Non
     run = httpx.get(f"{worker_api}/runs/{summary['id']}", timeout=5).json()
     assert run["progress"] == {"completed_cases": 5, "total_cases": 5}
     assert all(r["status"] == "ok" for r in run["results"])
-    precision = {
-        r["case_key"]: next(m for m in r["metrics"] if m["evaluator_name"] == "heuristic_context_precision")
-        for r in run["results"]
+    by_case = {r["case_key"]: r for r in run["results"]}
+    applied = {key: {m["evaluator_name"] for m in r["metrics"]} for key, r in by_case.items()}
+    # Each case gets exactly its configured checks (datasets/rag_support_v1.yaml).
+    defaults = {
+        "heuristic_context_precision",
+        "heuristic_context_recall",
+        "citation_correctness",
+        "latency",
+        "token_usage",
+        "estimated_cost",
     }
-    # Same deterministic scores as Phase 1's client-side run of this dataset:
-    # the evaluator formula didn't change, only where it executes.
+    assert applied["refund-policy-001"] == defaults | {"answer_contains"}
+    assert applied["warranty-outerwear-001"] == defaults | {"answer_regex"}
+    assert applied["out-of-scope-sponsorship-001"] == {
+        "citation_correctness",
+        "latency",
+        "token_usage",
+        "estimated_cost",
+        "answer_regex",
+    }
+
+    precision = {
+        key: next(m for m in r["metrics"] if m["evaluator_name"] == "heuristic_context_precision")
+        for key, r in by_case.items()
+        if "heuristic_context_precision" in applied[key]
+    }
+    # Same deterministic formula as Phase 1: the top-2 retriever returns one
+    # relevant and one irrelevant doc for three of these questions.
     assert precision["warranty-outerwear-001"]["score"] == pytest.approx(1.0)
-    assert precision["out-of-scope-sponsorship-001"]["score"] == pytest.approx(0.0)
-    assert run["aggregates"]["metrics"]["heuristic_context_precision@1.0.0"]["mean_score"] == pytest.approx(0.5)
+    assert precision["shipping-time-001"]["score"] == pytest.approx(0.5)
+
+    # Genuine failures: the refund answer never mentions the tags requirement
+    # (so it implies "yes" to a question whose correct answer is "no"), and the
+    # loyalty answer doesn't acknowledge the policy gap.
+    refund_contains = next(
+        m for m in by_case["refund-policy-001"]["metrics"] if m["evaluator_name"] == "answer_contains"
+    )
+    assert refund_contains["passed"] is False
+    passed = sorted(key for key, r in by_case.items() if r["passed"])
+    assert passed == ["out-of-scope-sponsorship-001", "warranty-outerwear-001"]
+    assert run["aggregates"]["pass_rate"] == pytest.approx(0.4)
 
 
 def test_faulty_cases_are_contained_by_the_docker_worker(worker_api: str) -> None:
@@ -162,8 +206,13 @@ def test_faulty_cases_are_contained_by_the_docker_worker(worker_api: str) -> Non
     assert publish.returncode == 0, publish.stdout + publish.stderr
 
     evaluate = _evaluate(
-        worker_api, "--dataset", "fault-injection-demo", "--adapter", "rag_app.fault_injection:answer",
-        "--timeout", "1",
+        worker_api,
+        "--dataset",
+        "fault-injection-demo",
+        "--adapter",
+        "rag_app.fault_injection:answer",
+        "--timeout",
+        "1",
     )
     assert evaluate.returncode == 0, evaluate.stdout + evaluate.stderr
 

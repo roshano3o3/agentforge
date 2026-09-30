@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError, createApplicationVersion, getApplication, listApplicationVersions } from "@/lib/api";
 import type { Application, ApplicationVersion } from "@/lib/types";
 
@@ -19,22 +19,29 @@ export default function ApplicationDetailPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
 
-  function load() {
-    setState("loading");
-    getApplication(params.name)
-      .then(async (app) => {
-        setApplication(app);
-        const v = await listApplicationVersions(app.id);
-        setVersions(v);
-        setState("ready");
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Unexpected error loading application.");
-        setState("error");
-      });
-  }
+  // State is only set in promise callbacks (never synchronously inside the
+  // effect); a reload after creating keeps the current content on screen.
+  const load = useCallback(
+    () =>
+      getApplication(params.name)
+        .then(async (app) => [app, await listApplicationVersions(app.id)] as const)
+        .then(
+          ([app, v]) => {
+            setApplication(app);
+            setVersions(v);
+            setState("ready");
+          },
+          (err: unknown) => {
+            setError(err instanceof ApiError ? err.message : "Unexpected error loading application.");
+            setState("error");
+          },
+        ),
+    [params.name],
+  );
 
-  useEffect(load, [params.name]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();

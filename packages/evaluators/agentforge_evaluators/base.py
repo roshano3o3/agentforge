@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from agentforge_evaluators.pricing import ModelPrice
 
@@ -25,8 +25,6 @@ EvaluatorKind = Literal["quality", "measurement"]
 class EvalInput:
     input: str
     expected_answer: str | None
-    expected_answer_contains: list[str]
-    expected_answer_regex: str | None
     expected_context: list[str]
     answer: str
     retrieved_doc_ids: list[str]
@@ -55,7 +53,12 @@ class MetricOutcome:
     labels: list[str] = field(default_factory=list)
 
 
-EvaluatorFn = Callable[[EvalInput, EvalConfig], MetricOutcome]
+# Per-case parameters from the dataset's evaluator config (e.g. answer_contains'
+# `phrases`). Validated by the evaluator's `validate_params` when the dataset is
+# written; at run time a missing required param still yields "not applicable".
+Params = Mapping[str, Any]
+EvaluatorFn = Callable[[EvalInput, EvalConfig, Params], MetricOutcome]
+ParamValidator = Callable[[Params], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class EvaluatorSpec:
     kind: EvaluatorKind
     description: str
     fn: EvaluatorFn
+    validate_params: ParamValidator
 
     @property
     def key(self) -> str:

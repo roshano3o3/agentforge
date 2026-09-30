@@ -1,6 +1,6 @@
 """arq worker entry point. Runs only inside the Linux `worker` container:
 
-    arq agentforge_worker.main.WorkerSettings
+arq agentforge_worker.main.WorkerSettings
 """
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ import os
 from pathlib import Path
 
 import yaml
+from arq import func
+from arq.connections import RedisSettings
+
 from agentforge_api.config import get_settings
 from agentforge_api.db.base import async_session_factory
 from agentforge_api.queue import EXECUTE_RUN_JOB
 from agentforge_evaluators import ModelPrice, parse_pricing
-from arq import func
-from arq.connections import RedisSettings
-
 from agentforge_worker.runner import execute_run
 
 log = logging.getLogger("agentforge.worker")

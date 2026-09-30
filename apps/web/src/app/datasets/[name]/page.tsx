@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   createDraftVersion,
@@ -13,7 +13,7 @@ import {
   publishVersion,
   type TestCaseInput,
 } from "@/lib/api";
-import type { Dataset, DatasetVersion, DraftTestCaseForm, TestCase } from "@/lib/types";
+import type { Dataset, DatasetVersion, DraftTestCaseForm, EvaluatorConfig, TestCase } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -37,12 +37,11 @@ function toTestCaseInput(tc: TestCase): TestCaseInput {
     case_key: tc.case_key,
     input: tc.input,
     expected_answer: tc.expected_answer,
-    // Carried through unchanged: a draft PATCH replaces the whole case, so
-    // dropping these here would silently erase them.
-    expected_answer_contains: tc.expected_answer_contains,
-    expected_answer_regex: tc.expected_answer_regex,
     expected_context: tc.expected_context,
     tags: tc.tags,
+    // Carried through unchanged: a draft PATCH replaces the whole case, so
+    // dropping this here would silently erase the case's evaluator config.
+    evaluators: tc.evaluators,
   };
 }
 
@@ -51,11 +50,38 @@ function formToTestCaseInput(f: DraftTestCaseForm): TestCaseInput {
     case_key: f.case_key,
     input: f.input,
     expected_answer: f.expected_answer.trim() || null,
-    expected_answer_contains: [],
-    expected_answer_regex: null,
     expected_context: splitList(f.expected_context),
     tags: splitList(f.tags),
+    evaluators: null, // inherits the version's default evaluators
   };
+}
+
+/** One line per configured evaluator: "+name {params}" or "-name" (dropped default). */
+function ConfigSummary({ config, emptyText }: { config: EvaluatorConfig | null; emptyText: string }) {
+  if (config === null || Object.keys(config).length === 0) return <span className="meta-line">{emptyText}</span>;
+  return (
+    <div className="config-list">
+      {Object.entries(config).map(([key, params]) => (
+        <span key={key} className={`mono config-item ${params === false ? "config-off" : ""}`}>
+          {params === false
+            ? `-${key}`
+            : `${key}${params && typeof params === "object" && Object.keys(params).length ? " " + JSON.stringify(params) : ""}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function DefaultEvaluators({ version }: { version: DatasetVersion }) {
+  return (
+    <div className="meta-line" style={{ margin: "4px 0 8px" }}>
+      Default evaluators:{" "}
+      <ConfigSummary
+        config={version.default_evaluators}
+        emptyText="(none configured: every evaluator the run pins applies)"
+      />
+    </div>
+  );
 }
 
 function DraftVersionCard({
@@ -131,6 +157,7 @@ function DraftVersionCard({
         v{version.version} <span className="badge badge-neutral">DRAFT</span>{" "}
         <span className="meta-line">· created {new Date(version.created_at).toLocaleString()}</span>
       </h3>
+      <DefaultEvaluators version={version} />
 
       {version.test_cases.length > 0 && (
         <table>
@@ -139,6 +166,7 @@ function DraftVersionCard({
               <th>case_key</th>
               <th>input</th>
               <th>expected_context</th>
+              <th>case evaluators</th>
               <th></th>
             </tr>
           </thead>
@@ -161,6 +189,9 @@ function DraftVersionCard({
                       </span>
                     ))}
                   </div>
+                </td>
+                <td>
+                  <ConfigSummary config={tc.evaluators} emptyText="defaults" />
                 </td>
                 <td>
                   {editingKey === tc.case_key ? (
@@ -267,12 +298,14 @@ function PublishedVersionCard({
           · published {version.published_at ? new Date(version.published_at).toLocaleString() : ""}
         </span>
       </h3>
+      <DefaultEvaluators version={version} />
       <table>
         <thead>
           <tr>
             <th>case_key</th>
             <th>input</th>
             <th>expected_context</th>
+            <th>case evaluators</th>
           </tr>
         </thead>
         <tbody>
@@ -288,6 +321,17 @@ function PublishedVersionCard({
                     </span>
                   ))}
                 </div>
+              </td>
+              <td>
+                <ConfigSummary config={tc.evaluators} emptyText="defaults" />
+                {(tc.expected_answer_contains.length > 0 || tc.expected_answer_regex) && (
+                  <div className="meta-line" title="Written before per-case evaluator config; still applied">
+                    legacy:{" "}
+                    {tc.expected_answer_contains.length > 0 &&
+                      `contains ${JSON.stringify(tc.expected_answer_contains)} `}
+                    {tc.expected_answer_regex && `regex ${tc.expected_answer_regex}`}
+                  </div>
+                )}
               </td>
             </tr>
           ))}
@@ -309,22 +353,27 @@ export default function DatasetDetailPage() {
   const [actionError, setActionError] = useState("");
   const [creatingDraft, setCreatingDraft] = useState(false);
 
-  function load() {
-    setState("loading");
-    getDataset(params.name)
-      .then(async (ds) => {
-        setDataset(ds);
-        const v = await listDatasetVersions(params.name);
-        setVersions(v);
-        setState("ready");
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Unexpected error loading dataset.");
-        setState("error");
-      });
-  }
+  // State is only set in promise callbacks (never synchronously inside the
+  // effect); a reload after an action keeps the current content on screen.
+  const load = useCallback(
+    () =>
+      Promise.all([getDataset(params.name), listDatasetVersions(params.name)]).then(
+        ([ds, v]) => {
+          setDataset(ds);
+          setVersions(v);
+          setState("ready");
+        },
+        (err: unknown) => {
+          setError(err instanceof ApiError ? err.message : "Unexpected error loading dataset.");
+          setState("error");
+        },
+      ),
+    [params.name],
+  );
 
-  useEffect(load, [params.name]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function handleNewDraft() {
     if (!dataset) return;

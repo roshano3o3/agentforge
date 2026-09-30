@@ -1,14 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
-import path from "node:path";
 import { API_PORT, WEB_PORT } from "./e2e/ports";
+import { PYTHON, REPO_ROOT } from "./e2e/env";
 
 // A dedicated API instance on its own port, pointed at a disposable Postgres
 // database and its own Redis queue, with a dedicated worker container
 // consuming that queue -- all set up (and torn down) by scripts/test-ui.ps1,
 // which passes them in through these env vars. It never touches the dev DB,
 // the dev queue, or a manually running `dev-api.ps1` on :8000.
-const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const VENV_PYTHON = path.join(REPO_ROOT, ".venv", "Scripts", "python.exe");
 const DATABASE_URL = process.env.AGENTFORGE_E2E_DATABASE_URL;
 const REDIS_URL = process.env.AGENTFORGE_E2E_REDIS_URL;
 if (!DATABASE_URL || !REDIS_URL) {
@@ -36,7 +34,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `${VENV_PYTHON} apps/api/scripts/serve_fresh.py`,
+      command: `"${PYTHON}" apps/api/scripts/serve_fresh.py`,
       cwd: REPO_ROOT,
       env: {
         AGENTFORGE_DATABASE_URL: DATABASE_URL,

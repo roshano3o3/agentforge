@@ -87,7 +87,8 @@ export default function NewRunForm() {
         application_version_id: appVersionId,
         dataset_version_id: datasetVersionId,
         adapter: { type: adapterType, target: adapterTarget.trim() },
-        evaluators: selected,
+        // All checked = no filter: each case applies what its dataset config declares.
+        evaluators: selected.length === evaluators.length ? null : selected,
         threshold: Number(threshold),
         timeout_seconds: Number(timeoutSeconds),
         provider_type: "local-deterministic",
@@ -187,7 +188,10 @@ export default function NewRunForm() {
         <input type="number" min="0" max="1" step="0.05" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
       </label>
       <fieldset className="wide">
-        <legend>Evaluators (all deterministic; none is an LLM judge)</legend>
+        <legend>
+          Evaluators allowed (all deterministic; none is an LLM judge). Each case applies only the evaluators its
+          dataset config declares; unchecking one filters it out of the run.
+        </legend>
         {evaluators.map((ev) => (
           <label key={ev.key} className="checkbox" title={ev.description}>
             <input

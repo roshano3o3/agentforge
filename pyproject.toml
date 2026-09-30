@@ -1,3 +1,46 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["apps/web"]
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings, pyflakes, import sorting, bugbear, pyupgrade.
+select = ["E", "W", "F", "I", "B", "UP"]
+# UP042 (StrEnum) changes str(member) formatting -- a behavior change, not lint.
+ignore = ["UP042"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI/Typer declare parameters with call defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "typer.Option", "typer.Argument"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "agentforge_api",
+    "agentforge_cli",
+    "agentforge_core",
+    "agentforge_evaluators",
+    "agentforge_sdk",
+    "agentforge_worker",
+    "rag_app",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "packages/core/agentforge_core",
+    "packages/evaluators/agentforge_evaluators",
+    "packages/sdk/agentforge_sdk",
+    "apps/api/agentforge_api",
+    "apps/worker/agentforge_worker",
+    "cli/agentforge_cli",
+    "examples/rag_app/rag_app",
+]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true

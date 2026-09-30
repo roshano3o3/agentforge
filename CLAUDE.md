@@ -40,6 +40,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - Test isolation: Postgres DBs `agentforge_test` / `agentforge_e2e_test`, Redis DBs 1 / 2, and
   dedicated worker containers; dev uses `agentforge` + Redis DB 0. Never point tests at dev.
 - Next.js dev server locks per project dir: stop `dev-web.ps1` before running `test-ui.ps1`.
+- Lint locally before pushing: `ruff check .`, `ruff format --check .`, `mypy` (venv), and in
+  `apps/web`: `npx eslint src e2e playwright.config.ts`, `npx tsc --noEmit`.
 - PowerShell 5.1: native stderr + `$ErrorActionPreference="Stop"` aborts when output is redirected —
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
@@ -49,9 +51,12 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
   Tests: SQLite 75 passed + 9 skipped; `test.ps1 -Postgres` 84 passed; `test-ui.ps1` 2 passed.
-- Repo: https://github.com/roshano3o3/agentforge (public). CI (`.github/workflows/ci.yml`, Python suite
-  only) passed on its first run, commit `d8851e0`.
-- 4 pre-existing ESLint `react-hooks/set-state-in-effect` errors in applications/datasets pages.
+- **Pre-Phase-3 cleanup done**: per-case evaluator config (`default_evaluators` + case `evaluators`,
+  frozen with the published version; see docs/evaluators.md). Example dataset pass rate 40% (2/5,
+  fixture-based, 3 genuine failures). Tests: SQLite 101 passed + 11 skipped; Postgres 112; Playwright 2.
+- Repo: https://github.com/roshano3o3/agentforge (public). CI jobs: lint (ruff check + format, mypy,
+  eslint, tsc), python (Postgres + SQLite), browser (Playwright). Keep all of them green.
+- Legacy Phase 2 fields `expected_answer_contains`/`_regex` are read-only; never rewrite published rows.
 
 ## Phase plan
 1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done**

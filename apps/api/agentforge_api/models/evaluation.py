@@ -3,9 +3,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentforge_api.db.base import Base
@@ -68,7 +67,7 @@ class EvaluationRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    results: Mapped[list["EvaluationResult"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    results: Mapped[list[EvaluationResult]] = relationship(back_populates="run", cascade="all, delete-orphan")
 
 
 class EvaluationResult(Base):
@@ -95,9 +94,9 @@ class EvaluationResult(Base):
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    run: Mapped["EvaluationRun"] = relationship(back_populates="results")
-    test_case: Mapped["TestCase"] = relationship()
-    metrics: Mapped[list["MetricScore"]] = relationship(back_populates="result", cascade="all, delete-orphan")
+    run: Mapped[EvaluationRun] = relationship(back_populates="results")
+    test_case: Mapped[TestCase] = relationship()
+    metrics: Mapped[list[MetricScore]] = relationship(back_populates="result", cascade="all, delete-orphan")
 
 
 class MetricScore(Base):
@@ -107,9 +106,7 @@ class MetricScore(Base):
     __tablename__ = "metric_scores"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    evaluation_result_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("evaluation_results.id"), nullable=False
-    )
+    evaluation_result_id: Mapped[str] = mapped_column(String(36), ForeignKey("evaluation_results.id"), nullable=False)
     evaluator_name: Mapped[str] = mapped_column(String(100), nullable=False)
     evaluator_version: Mapped[str] = mapped_column(String(50), nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -121,4 +118,4 @@ class MetricScore(Base):
     labels: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    result: Mapped["EvaluationResult"] = relationship(back_populates="metrics")
+    result: Mapped[EvaluationResult] = relationship(back_populates="metrics")

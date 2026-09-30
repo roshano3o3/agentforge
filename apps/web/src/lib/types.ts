@@ -120,7 +120,8 @@ export interface RunCreateInput {
   application_version_id: string;
   dataset_version_id: string;
   adapter: { type: "python" | "http"; target: string };
-  evaluators: string[];
+  // null = apply each case's configured evaluators; a list additionally filters them.
+  evaluators: string[] | null;
   threshold: number;
   timeout_seconds: number;
   provider_type: string;
@@ -148,15 +149,20 @@ export interface Dataset {
   created_at: string;
 }
 
+// {"<evaluator name or name@version>": {params} | false}; see docs/evaluators.md.
+export type EvaluatorConfig = Record<string, Record<string, unknown> | boolean>;
+
 export interface TestCase {
   id: string;
   case_key: string;
   input: string;
   expected_answer: string | null;
-  expected_answer_contains: string[];
-  expected_answer_regex: string | null;
   expected_context: string[];
   tags: string[];
+  evaluators: EvaluatorConfig | null;
+  // Read-only legacy fields on versions published before per-case config.
+  expected_answer_contains: string[];
+  expected_answer_regex: string | null;
 }
 
 export type DatasetVersionStatus = "draft" | "published";
@@ -168,6 +174,7 @@ export interface DatasetVersion {
   status: DatasetVersionStatus;
   created_at: string;
   published_at: string | null;
+  default_evaluators: EvaluatorConfig | null;
   test_cases: TestCase[];
 }
 

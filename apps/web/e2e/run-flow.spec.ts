@@ -3,9 +3,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { API_PORT } from "./ports";
+import { PYTHON, REPO_ROOT } from "./env";
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const VENV_PYTHON = path.join(REPO_ROOT, ".venv", "Scripts", "python.exe");
 const API_URL = `http://127.0.0.1:${API_PORT}`;
 const SCREENSHOT_DIR = path.join(REPO_ROOT, "docs", "screenshots");
 const APP_NAME = "ui-run-app";
@@ -15,7 +14,7 @@ test.beforeAll(async ({ request }) => {
   // A published dataset (via the real CLI) and an application with a version
   // (via the real API) for the form to pick. No run is created here: the
   // test starts it from the UI.
-  execFileSync(VENV_PYTHON, ["-m", "agentforge_cli.main", "dataset", "publish", "datasets/rag_support_v1.yaml", "--api-url", API_URL], {
+  execFileSync(PYTHON, ["-m", "agentforge_cli.main", "dataset", "publish", "datasets/rag_support_v1.yaml", "--api-url", API_URL], {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env: { ...process.env, PYTHONIOENCODING: "utf-8" },
@@ -55,17 +54,23 @@ test("start a run from the UI and see the worker's completed per-case results", 
   await expect(page.locator("h1 .badge-label", { hasText: "fixture-based" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Per-metric means" })).toBeVisible();
 
-  // Per-case rows with evaluator verdicts and reasons.
+  // Per-case rows: each case shows only its configured evaluators, with verdicts and reasons.
   const rows = page.locator("tr[data-case-key]");
   await expect(rows).toHaveCount(5);
-  const refund = page.locator('tr[data-case-key="refund-policy-001"]');
-  const contains = refund.locator(".metric-chip", { hasText: "answer_contains" });
-  await expect(contains).toContainText("pass");
-  await expect(contains.locator(".metric-reason")).toContainText("contains all 1 expected phrase");
+  const shipping = page.locator('tr[data-case-key="shipping-time-001"]');
+  const shippingContains = shipping.locator(".metric-chip", { hasText: "answer_contains" });
+  await expect(shippingContains).toContainText("pass");
+  await expect(shippingContains.locator(".metric-reason")).toContainText("contains all 2 expected phrase");
+  // A genuine failure: the refund answer never states the tags requirement.
+  const refundContains = page
+    .locator('tr[data-case-key="refund-policy-001"]')
+    .locator(".metric-chip", { hasText: "answer_contains" });
+  await expect(refundContains).toContainText("fail");
+  await expect(refundContains.locator(".metric-reason")).toContainText("missing 1 of 1");
+  // The out-of-scope case drops the precision/recall defaults and uses a refusal check instead.
   const outOfScope = page.locator('tr[data-case-key="out-of-scope-sponsorship-001"]');
-  await expect(outOfScope.locator(".metric-chip", { hasText: "heuristic_context_precision" })).toContainText(
-    "no documents retrieved",
-  );
+  await expect(outOfScope.locator(".metric-chip", { hasText: "heuristic_context_precision" })).toHaveCount(0);
+  await expect(outOfScope.locator(".metric-chip", { hasText: "answer_regex" })).toContainText("pass");
   await expect(page.getByText("est. $", { exact: false }).first()).toBeVisible();
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "run-detail-completed.png"), fullPage: true });
 

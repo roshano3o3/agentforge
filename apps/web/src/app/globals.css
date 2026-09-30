@@ -425,6 +425,21 @@ details.evidence pre {
   margin: 0;
 }
 
+.config-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.config-item {
+  font-size: 11px;
+}
+
+.config-off {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .version-block h3 {
   font-size: 14px;
   margin-bottom: 8px;

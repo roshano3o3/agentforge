@@ -6,6 +6,7 @@ import type {
   EvaluationRun,
   EvaluationRunSummary,
   Evaluator,
+  EvaluatorConfig,
   RunCreateInput,
 } from "./types";
 
@@ -127,10 +128,9 @@ export interface TestCaseInput {
   case_key: string;
   input: string;
   expected_answer: string | null;
-  expected_answer_contains: string[];
-  expected_answer_regex: string | null;
   expected_context: string[];
   tags: string[];
+  evaluators: EvaluatorConfig | null;
 }
 
 /** Creates a new DRAFT version (optionally pre-populated). Does not publish it. */

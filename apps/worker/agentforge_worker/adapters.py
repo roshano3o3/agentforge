@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
 from agentforge_sdk import AdapterOutput
 
 _MAX_ERROR_CHARS = 4000
@@ -67,22 +68,31 @@ def coerce_output(raw: Any) -> AdapterOutput:
     answer = data.get("answer")
     if not isinstance(answer, str):
         raise AdapterOutputError("adapter output 'answer' must be a string")
-    lists = {}
-    for key in ("retrieved_doc_ids", "citations"):
-        value = data.get(key) or []
-        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            raise AdapterOutputError(f"adapter output '{key}' must be a list of strings")
-        lists[key] = value
-    tokens = {}
-    for key in ("input_tokens", "output_tokens"):
-        value = data.get(key)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
-            raise AdapterOutputError(f"adapter output '{key}' must be a non-negative integer or null")
-        tokens[key] = value
     model = data.get("model")
     if model is not None and not isinstance(model, str):
         raise AdapterOutputError("adapter output 'model' must be a string or null")
-    return AdapterOutput(answer=answer, model=model, **lists, **tokens)
+    return AdapterOutput(
+        answer=answer,
+        retrieved_doc_ids=_string_list(data, "retrieved_doc_ids"),
+        citations=_string_list(data, "citations"),
+        input_tokens=_token_count(data, "input_tokens"),
+        output_tokens=_token_count(data, "output_tokens"),
+        model=model,
+    )
+
+
+def _string_list(data: dict[str, Any], key: str) -> list[str]:
+    value = data.get(key) or []
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise AdapterOutputError(f"adapter output '{key}' must be a list of strings")
+    return value
+
+
+def _token_count(data: dict[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        raise AdapterOutputError(f"adapter output '{key}' must be a non-negative integer or null")
+    return value
 
 
 def _describe(exc: BaseException) -> tuple[str, str]:
@@ -100,19 +110,20 @@ def _call_in_daemon_thread(fn: Callable[[str], Any], input_text: str) -> concurr
 
     def target() -> None:
         start = time.perf_counter()
+        error: BaseException | None = None
+        result: Any = None
         try:
             result = fn(input_text)
         except BaseException as exc:  # noqa: BLE001 - includes SystemExit; reported, never re-raised here
-            outcome = ("exception", exc)
-        else:
-            outcome = ("result", (result, (time.perf_counter() - start) * 1000))
+            error = exc
+        elapsed_ms = (time.perf_counter() - start) * 1000
         # If the case already timed out, the future was cancelled and this
         # late outcome is simply discarded.
         try:
-            if outcome[0] == "exception":
-                future.set_exception(outcome[1])
+            if error is not None:
+                future.set_exception(error)
             else:
-                future.set_result(outcome[1])
+                future.set_result((result, elapsed_ms))
         except concurrent.futures.InvalidStateError:
             pass
 
@@ -182,7 +193,7 @@ async def invoke(adapter: PythonAdapter | HttpAdapter, input_text: str, case_key
         output = coerce_output(raw)
     except asyncio.CancelledError:
         raise  # the worker itself is being cancelled -- not the adapter's fault
-    except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException):
+    except (TimeoutError, httpx.TimeoutException):
         return CaseOutcome(
             status="timeout",
             latency_ms=elapsed(),

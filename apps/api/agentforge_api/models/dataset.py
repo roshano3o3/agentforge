@@ -3,9 +3,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentforge_api.db.base import Base
@@ -25,7 +24,7 @@ class Dataset(Base):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    versions: Mapped[list["DatasetVersion"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    versions: Mapped[list[DatasetVersion]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class DatasetVersion(Base):
@@ -56,11 +55,12 @@ class DatasetVersion(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Version-level evaluator config (see agentforge_evaluators.config). NULL
+    # for versions written before per-case config: base = every run evaluator.
+    default_evaluators: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    dataset: Mapped["Dataset"] = relationship(back_populates="versions")
-    test_cases: Mapped[list["TestCase"]] = relationship(
-        back_populates="dataset_version", cascade="all, delete-orphan"
-    )
+    dataset: Mapped[Dataset] = relationship(back_populates="versions")
+    test_cases: Mapped[list[TestCase]] = relationship(back_populates="dataset_version", cascade="all, delete-orphan")
 
 
 class TestCase(Base):
@@ -76,9 +76,16 @@ class TestCase(Base):
     case_key: Mapped[str] = mapped_column(String(200), nullable=False)
     input: Mapped[str] = mapped_column(String, nullable=False)
     expected_answer: Mapped[str | None] = mapped_column(String, nullable=True)
-    expected_answer_contains: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    expected_answer_regex: Mapped[str | None] = mapped_column(String, nullable=True)
     expected_context: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Per-case evaluator config, laid over the version's default_evaluators.
+    # NULL = inherit the default unchanged.
+    evaluators: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Legacy (Phase 2): answer assertions written before per-case config. Kept
+    # read-only so published versions are never rewritten; the worker maps
+    # them to answer_contains/answer_regex params, and new-draft converts
+    # them into `evaluators`.
+    expected_answer_contains: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    expected_answer_regex: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    dataset_version: Mapped["DatasetVersion"] = relationship(back_populates="test_cases")
+    dataset_version: Mapped[DatasetVersion] = relationship(back_populates="test_cases")

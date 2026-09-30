@@ -7,23 +7,45 @@
 # creates dataset "rag-support" and a new immutable DatasetVersion containing
 # these 5 test cases. Editing this file and re-publishing produces a NEW
 # version -- it never overwrites a previously published one.
+#
+# Evaluator config: `defaults.evaluators` applies to every case; each case's
+# `evaluators` adds checks (with their parameters) or drops a default with
+# `false`. A run applies exactly each case's resulting set. The answer checks
+# were written from the policy text in examples/rag_app/rag_app/documents.py,
+# not from the example app's output.
 name: rag-support
 description: >
   Five test cases against the synthetic Northwind Outfitters policy corpus,
-  used to exercise the example RAG app and the evaluators end to end.
-  expected_answer_contains / expected_answer_regex state what a correct
-  answer must say; they were written from the policy text, not from the
-  example app's output.
+  used to exercise the example RAG app and the evaluators end to end. Each
+  case declares the answer check that fits it; retrieval, citation and cost
+  checks come from the dataset defaults.
+
+defaults:
+  evaluators:
+    heuristic_context_precision: {}
+    heuristic_context_recall: {}
+    citation_correctness: {}
+    latency: {}
+    token_usage: {}
+    estimated_cost: {}
+  # exact_match is deliberately not a default: expected_answer is a
+  # free-text reference, and a verbatim comparison against it measures
+  # phrasing, not correctness.
 
 test_cases:
   - id: refund-policy-001
     input: "Can I return a pair of hiking boots I bought 30 days ago if I no longer have the tags?"
+    # Corrected: the Returns and Refunds Policy requires the original tags,
+    # so the correct answer is no (earlier versions of this file said yes).
     expected_answer: >
-      Yes, returns are accepted within 45 days of purchase for a full refund,
-      per the Returns and Refunds Policy.
+      No. Returns are accepted within 45 days of purchase, but items must be
+      unworn, unwashed, and include the original tags, so boots without their
+      tags aren't eligible, per the Returns and Refunds Policy.
     expected_context:
       - policy-returns-001
-    expected_answer_contains: ["45 days"]
+    evaluators:
+      # The deciding fact for this question is the tags requirement.
+      answer_contains: {phrases: ["original tags"]}
     tags: [policy, rag, returns]
 
   - id: shipping-time-001
@@ -33,7 +55,8 @@ test_cases:
       75 dollars, per the Shipping Policy.
     expected_context:
       - policy-shipping-002
-    expected_answer_contains: ["5 to 8 business days", "75 dollars"]
+    evaluators:
+      answer_contains: {phrases: ["5 to 8 business days", "75 dollars"]}
     tags: [policy, rag, shipping]
 
   - id: warranty-outerwear-001
@@ -43,7 +66,8 @@ test_cases:
       per the Product Warranty policy.
     expected_context:
       - policy-warranty-003
-    expected_answer_regex: '\b2[- ]year\b'
+    evaluators:
+      answer_regex: {pattern: '\b2[- ]year\b'}
     tags: [policy, rag, warranty]
 
   - id: loyalty-points-return-001
@@ -54,6 +78,10 @@ test_cases:
       is a real gap in the policy corpus this test case intentionally surfaces.
     expected_context:
       - policy-loyalty-006
+    evaluators:
+      # A correct answer has to say the policy doesn't address this.
+      answer_regex:
+        pattern: "(?i)\\b(not|doesn't|does not)\\b.*\\b(cover|address|mention|specify|say)"
     tags: [policy, rag, loyalty]
 
   - id: out-of-scope-sponsorship-001
@@ -62,6 +90,13 @@ test_cases:
       No policy document covers this; the correct behavior is to say the
       information isn't available rather than guessing.
     expected_context: []
-    # The correct behavior is to say so, not to guess.
-    expected_answer_regex: '(?i)could not find|not available|no information'
+    evaluators:
+      # The correct behavior is to decline without citing anything.
+      answer_regex: {pattern: '(?i)could not find|not available|no information'}
+      # heuristic_context_precision is defined as 0.0 when nothing is
+      # retrieved, so it can't credit correctly retrieving nothing (its
+      # documented limitation, docs/evaluators.md); recall is undefined with
+      # no expected docs. Neither measures this case.
+      heuristic_context_precision: false
+      heuristic_context_recall: false
     tags: [policy, rag, out-of-scope]

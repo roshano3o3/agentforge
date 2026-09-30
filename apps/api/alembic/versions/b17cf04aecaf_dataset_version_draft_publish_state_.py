@@ -25,19 +25,19 @@ Each statement is executed individually (`op.execute()` per statement):
 neither the sqlite3 DBAPI nor asyncpg's extended query protocol reliably
 accept multiple semicolon-separated statements in a single execute call.
 """
+
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = 'b17cf04aecaf'
-down_revision: Union[str, None] = '8fdb390e1f2b'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "b17cf04aecaf"
+down_revision: str | None = "8fdb390e1f2b"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _PG_UP_STATEMENTS = [
@@ -165,18 +165,14 @@ def upgrade() -> None:
         for stmt in _SQLITE_UP_STATEMENTS:
             op.execute(stmt)
     else:
-        raise NotImplementedError(
-            f"no dataset_version immutability trigger implemented for dialect '{dialect}'"
-        )
+        raise NotImplementedError(f"no dataset_version immutability trigger implemented for dialect '{dialect}'")
 
 
 def downgrade() -> None:
     # The pre-draft schema requires published_at on every row, so a draft can't
     # be represented there. Refuse clearly rather than silently deleting drafts
     # (or failing later with an opaque NOT NULL violation).
-    drafts = op.get_bind().execute(
-        sa.text("SELECT COUNT(*) FROM dataset_versions WHERE status = 'draft'")
-    ).scalar_one()
+    drafts = op.get_bind().execute(sa.text("SELECT COUNT(*) FROM dataset_versions WHERE status = 'draft'")).scalar_one()
     if drafts:
         raise RuntimeError(
             f"cannot downgrade: {drafts} draft dataset_version(s) exist, and the previous "

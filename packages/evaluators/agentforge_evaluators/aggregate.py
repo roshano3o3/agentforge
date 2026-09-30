@@ -101,12 +101,7 @@ def compute_aggregates(cases: Iterable[CaseRecord]) -> dict:
         }
 
     cost_key = next((k for k in metrics_out if k.startswith("estimated_cost@")), None)
-    costs = [
-        m.value
-        for c in cases
-        for m in c.metrics
-        if m.evaluator_name == "estimated_cost" and m.value is not None
-    ]
+    costs = [m.value for c in cases for m in c.metrics if m.evaluator_name == "estimated_cost" and m.value is not None]
     cost_block = None
     if cost_key is not None:
         cost_block = {

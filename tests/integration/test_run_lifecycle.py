@@ -30,19 +30,23 @@ RAG_CASES = [
     {
         "case_key": "refund",
         "input": "Can I return hiking boots after 30 days without tags?",
-        "expected_answer_contains": ["45 days"],
         "expected_context": ["policy-returns-001"],
+        "evaluators": {"answer_contains": {"phrases": ["45 days"]}},
     },
     {
         "case_key": "warranty",
         "input": "Do you offer a warranty on outerwear jackets?",
-        "expected_answer_regex": r"\b2 year\b",
         "expected_context": ["policy-warranty-003"],
+        "evaluators": {"answer_regex": {"pattern": r"\b2 year\b"}},
     },
 ]
 
 FAULT_CASES = [
-    {"case_key": "a-ok", "input": "Do you offer a warranty on outerwear jackets?", "expected_context": ["policy-warranty-003"]},
+    {
+        "case_key": "a-ok",
+        "input": "Do you offer a warranty on outerwear jackets?",
+        "expected_context": ["policy-warranty-003"],
+    },
     {"case_key": "b-timeout", "input": "[[sleep:3]] warranty on outerwear?", "expected_context": []},
     {"case_key": "c-crash", "input": "[[crash]] returns?", "expected_context": []},
     {"case_key": "d-exit", "input": "[[exit]] returns?", "expected_context": []},
@@ -50,11 +54,17 @@ FAULT_CASES = [
 ]
 
 
-async def _setup(client: AsyncClient, cases: list[dict], *, publish: bool = True) -> dict:
+async def _setup(
+    client: AsyncClient, cases: list[dict], *, publish: bool = True, default_evaluators: dict | None = None
+) -> dict:
     application = (await client.post("/applications", json={"name": "app"})).json()
     app_version = (await client.post(f"/applications/{application['id']}/versions", json={"version": "v1"})).json()
     dataset = (await client.post("/datasets", json={"name": "ds"})).json()
-    draft = (await client.post(f"/datasets/{dataset['id']}/versions", json={"test_cases": cases})).json()
+    resp = await client.post(
+        f"/datasets/{dataset['id']}/versions", json={"test_cases": cases, "default_evaluators": default_evaluators}
+    )
+    assert resp.status_code == 200, resp.text
+    draft = resp.json()
     if publish:
         resp = await client.post(f"/datasets/ds/versions/{draft['version']}/publish")
         assert resp.status_code == 200, resp.text
@@ -253,8 +263,11 @@ async def test_run_left_running_by_a_dead_worker_restarts_from_scratch(
     async with session_factory() as session:
         session.add(
             EvaluationResult(
-                evaluation_run_id=second["id"], test_case_id=first_case["test_case_id"],
-                latency_ms=1.0, status=ResultStatus.ok, passed=True,
+                evaluation_run_id=second["id"],
+                test_case_id=first_case["test_case_id"],
+                latency_ms=1.0,
+                status=ResultStatus.ok,
+                passed=True,
             )
         )
         await session.commit()

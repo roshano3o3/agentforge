@@ -34,26 +34,84 @@ no evaluator returned `passed=false`. Errors and timeouts fail the case and
 are not scored. An evaluator that itself raises is recorded as a failed
 metric with the exception in its reason ("evaluator error: ..."), not a crash.
 
-`threshold` (default 0.7) is the run's pass line for 0..1 scores.
+`threshold` (default 0.7) is the run's pass line for 0..1 scores. There is
+no per-case threshold.
+
+## Which evaluators apply to a case: per-case config
+
+A dataset version has `default_evaluators`, and each test case may have its
+own `evaluators`. Both map an evaluator (`name` or `name@version`) to its
+parameters (`{}` or `true` for none), or — only in a case — to `false`, which
+drops a default for that case:
+
+```yaml
+defaults:
+  evaluators:
+    heuristic_context_precision: {}
+    latency: {max_ms: 500}
+test_cases:
+  - id: refund-policy-001
+    evaluators:
+      answer_contains: {phrases: ["original tags"]}   # added for this case
+  - id: out-of-scope-sponsorship-001
+    evaluators:
+      heuristic_context_precision: false              # dropped for this case
+```
+
+A case's effective set is the default with the case's entries laid over it,
+matched by evaluator **name** (a case's `answer_regex@1.0.0` replaces a
+default `answer_regex`). **A run applies exactly that set to the case —
+nothing else**, so a case never gets "not applicable" noise from checks it
+didn't ask for. Rules (`agentforge_evaluators/config.py`):
+
+- Configs are validated against the registry when the dataset is written:
+  unknown evaluators, unknown or missing parameters, empty phrase lists and
+  invalid regexes are rejected (`422` from the API, an error from `agentforge
+  dataset validate`), naming the case.
+- The config is part of the published version and frozen with it (service
+  layer + DB trigger).
+- By default a run pins exactly the evaluators the configs reference. An
+  explicit `--evaluators` list (or unchecking in the dashboard form) filters
+  that set further. A config that applies nothing to any case is rejected.
+- The params actually used are stored in each result's evidence (`params`).
+- A version with **no** default config (published before per-case config
+  existed) behaves as before: every evaluator the run pins applies. Its
+  legacy per-case `expected_answer_contains` / `expected_answer_regex` fields
+  are supplied as `answer_contains` / `answer_regex` params at run time.
+
+Per-case parameters, by evaluator:
+
+| Evaluator | Parameters |
+|---|---|
+| `exact_match` | `expected` (string; default: the case's `expected_answer`) |
+| `answer_contains` | `phrases` (required, non-empty list) |
+| `answer_regex` | `pattern` (required, must compile) |
+| `heuristic_context_precision`, `heuristic_context_recall`, `citation_correctness` | `expected_context` (doc IDs; default: the case's `expected_context`) |
+| `latency` | `max_ms` (> 0; default: the run's `max_latency_ms`) |
+| `token_usage`, `estimated_cost` | none |
+
+Moving these inputs from fixed test-case fields to parameters changed no
+formula, so all versions stay `1.0.0`: the same inputs give the same result.
 
 ## Answer text
 
 ### `exact_match@1.0.0`
-`normalize(answer) == normalize(expected_answer)`, where normalize =
+`normalize(answer) == normalize(expected)`, where `expected` is the
+`expected` param or else the case's `expected_answer`, and normalize =
 trim + casefold + collapse internal whitespace. Nothing else (punctuation
-counts). Score 1.0 / 0.0; passes on 1.0. N/A without `expected_answer`.
-A correct answer phrased differently fails — that's the definition.
+counts). Score 1.0 / 0.0; passes on 1.0. N/A with no expected answer.
+A correct answer phrased differently fails — that's the definition, which is
+why it only fits cases whose answer is a short exact token.
 
 ### `answer_contains@1.0.0`
-For each phrase in `expected_answer_contains`: case-insensitive substring
-of the normalized answer. Score = found / total; passes only if **all** are
-found; evidence lists found and missing. N/A without phrases.
+For each of the `phrases`: case-insensitive substring of the normalized
+answer. Score = found / total; passes only if **all** are found; evidence
+lists found and missing. N/A without phrases.
 
 ### `answer_regex@1.0.0`
-`re.search(expected_answer_regex, answer)` (use `(?i)` for
-case-insensitive). Score 1.0 / 0.0. The pattern is validated when the
-dataset is written; a pattern that somehow fails to compile fails the case
-visibly. N/A without a pattern.
+`re.search(pattern, answer)` (use `(?i)` for case-insensitive). Score
+1.0 / 0.0. The pattern is validated when the dataset is written; a pattern
+that somehow fails to compile fails the case visibly. N/A without a pattern.
 
 ## Retrieval and citations (document IDs)
 
@@ -71,8 +129,9 @@ This is **not** the RAGAS `context_precision` metric: RAGAS is rank-weighted
 and by default uses an LLM to judge relevance. This is an order-agnostic
 set-overlap heuristic over hand-labeled IDs, which is why it's always
 labeled "heuristic". Known limitation: it can't reward correctly
-retrieving nothing for an out-of-scope question (that still scores 0.0) —
-`rag_support_v1.yaml`'s `out-of-scope-sponsorship-001` shows it.
+retrieving nothing for an out-of-scope question (that still scores 0.0), so
+`rag_support_v1.yaml`'s `out-of-scope-sponsorship-001` drops it (`false`)
+and checks the refusal instead.
 Unchanged from Phase 1 (same function, `heuristic_context_precision.py`).
 
 ### `heuristic_context_recall@1.0.0`
@@ -96,8 +155,8 @@ with no unsupported citations.
 
 ### `latency@1.0.0`
 Wall-clock time of the adapter call, measured in the worker, in ms. With a
-`max_latency_ms` budget on the run: passes at `latency <= budget`;
-without one, `passed` is null (recorded, not judged).
+budget (the case's `max_ms` param, else the run's `max_latency_ms`): passes
+at `latency <= budget`; without one, `passed` is null (recorded, not judged).
 
 ### `token_usage@1.0.0`
 `input_tokens + output_tokens` **as reported by the adapter**. AgentForge

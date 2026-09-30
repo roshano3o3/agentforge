@@ -7,10 +7,11 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Import models so they register on Base.metadata before we read it.
-from agentforge_api.models import application, dataset, evaluation  # noqa: F401
 from agentforge_api.config import get_settings
 from agentforge_api.db.base import Base
+
+# Import models so they register on Base.metadata before we read it.
+from agentforge_api.models import application, dataset, evaluation  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

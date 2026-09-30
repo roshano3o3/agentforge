@@ -3,38 +3,48 @@
 These record a measured `value` + `unit` rather than a 0..1 quality score.
 Token counts are whatever the adapter reports -- AgentForge never guesses
 them -- and cost is only ever an estimate from configured rates.
+
+Per-case param: latency takes `max_ms` (a per-case budget; default: the
+run's max_latency_ms). token_usage and estimated_cost take none.
 """
 
 from __future__ import annotations
 
-from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome
+from typing import Any
+
+from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome, Params
 
 
 def _ms(value: float) -> str:
     return f"{value:.2f} ms" if value < 10 else f"{value:.0f} ms"
 
 
-def latency(case: EvalInput, config: EvalConfig) -> MetricOutcome:
+def latency(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
     ms = case.latency_ms
-    evidence = {"latency_ms": ms, "measured": "wall-clock time of the adapter call, in the worker"}
-    if config.max_latency_ms is None:
+    budget = params.get("max_ms", config.max_latency_ms)
+    evidence: dict[str, Any] = {"latency_ms": ms, "measured": "wall-clock time of the adapter call, in the worker"}
+    if budget is None:
         return MetricOutcome(
-            score=None, passed=None, reason=f"{_ms(ms)} (no latency budget configured)",
-            evidence=evidence, value=ms, unit="ms",
+            score=None,
+            passed=None,
+            reason=f"{_ms(ms)} (no latency budget configured)",
+            evidence=evidence,
+            value=ms,
+            unit="ms",
         )
-    passed = ms <= config.max_latency_ms
-    evidence["max_latency_ms"] = config.max_latency_ms
+    passed = ms <= budget
+    evidence["max_latency_ms"] = budget
     return MetricOutcome(
         score=None,
         passed=passed,
-        reason=f"{_ms(ms)} {'<=' if passed else '>'} budget {_ms(config.max_latency_ms)}",
+        reason=f"{_ms(ms)} {'<=' if passed else '>'} budget {_ms(budget)}",
         evidence=evidence,
         value=ms,
         unit="ms",
     )
 
 
-def token_usage(case: EvalInput, config: EvalConfig) -> MetricOutcome:
+def token_usage(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
     if case.input_tokens is None and case.output_tokens is None:
         return MetricOutcome(
             score=None,
@@ -60,17 +70,23 @@ def token_usage(case: EvalInput, config: EvalConfig) -> MetricOutcome:
     )
 
 
-def estimated_cost(case: EvalInput, config: EvalConfig) -> MetricOutcome:
+def estimated_cost(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
     labels = ["estimated"]
     if case.input_tokens is None and case.output_tokens is None:
         return MetricOutcome(
-            score=None, passed=None, reason="cannot estimate: adapter reported no token usage",
-            evidence={"model": case.model}, labels=labels,
+            score=None,
+            passed=None,
+            reason="cannot estimate: adapter reported no token usage",
+            evidence={"model": case.model},
+            labels=labels,
         )
     if case.model is None:
         return MetricOutcome(
-            score=None, passed=None, reason="cannot estimate: adapter reported no model name",
-            evidence={}, labels=labels,
+            score=None,
+            passed=None,
+            reason="cannot estimate: adapter reported no model name",
+            evidence={},
+            labels=labels,
         )
     price = config.pricing.get(case.model)
     if price is None:

@@ -1,26 +1,46 @@
 from __future__ import annotations
 
-from agentforge_core.schemas import EvaluationRunCreate, EvaluationRunOut, EvaluationRunSummaryOut
-from agentforge_evaluators import DEFAULT_EVALUATORS, UnknownEvaluatorError, resolve
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.application import Application, ApplicationVersion
-from agentforge_api.models.dataset import DatasetVersion, DatasetVersionStatus
+from agentforge_api.models.dataset import DatasetVersion, DatasetVersionStatus, TestCase
 from agentforge_api.models.evaluation import EvaluationRun, RunStatus
 from agentforge_api.queue import QueueUnavailableError, RunQueue, get_run_queue
 from agentforge_api.services import runs as run_service
+from agentforge_core.schemas import EvaluationRunCreate, EvaluationRunOut, EvaluationRunSummaryOut
+from agentforge_evaluators import DEFAULT_EVALUATORS, UnknownEvaluatorError, referenced_keys, resolve
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
-def _pin_evaluators(requested: list[str] | None) -> list[str]:
-    """Resolve every requested evaluator now and store it pinned as
+async def _pin_evaluators(
+    requested: list[str] | None, dataset_version: DatasetVersion, session: AsyncSession
+) -> list[str]:
+    """Resolve the run's evaluators now and store them pinned as
     name@version, so a later evaluator release never changes what this run
-    means. Unknown names are a 400, before anything is persisted."""
-    specs = requested if requested else DEFAULT_EVALUATORS
+    means. Unknown names are a 400, before anything is persisted.
+
+    Default: exactly the evaluators the dataset version's configs reference
+    (all registered ones for versions without a default config). An explicit
+    list is a filter: per case, only configured evaluators that are also in
+    the list run.
+    """
+    if requested:
+        specs = requested
+    else:
+        case_configs: list[dict | None] = list(
+            await session.scalars(select(TestCase.evaluators).where(TestCase.dataset_version_id == dataset_version.id))
+        )
+        referenced = referenced_keys(dataset_version.default_evaluators, case_configs)
+        specs = DEFAULT_EVALUATORS if referenced is None else referenced
+        if not specs:
+            raise HTTPException(
+                status_code=400,
+                detail="this dataset version's evaluator config applies no evaluators to any case",
+            )
     pinned: list[str] = []
     for spec in specs:
         try:
@@ -68,7 +88,7 @@ async def create_run(
         application_version_id=app_version.id,
         dataset_version_id=dataset_version.id,
         provider_type=payload.provider_type,
-        evaluators=_pin_evaluators(payload.evaluators),
+        evaluators=await _pin_evaluators(payload.evaluators, dataset_version, session),
         adapter_type=payload.adapter.type,
         adapter_target=payload.adapter.target,
         timeout_seconds=payload.timeout_seconds,

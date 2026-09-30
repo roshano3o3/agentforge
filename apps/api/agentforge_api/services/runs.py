@@ -11,18 +11,8 @@ triggers enforce the same rule underneath, independent of this module.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from agentforge_core.schemas import (
-    FIXTURE_BASED_LABEL,
-    LOCAL_DETERMINISTIC,
-    EvaluationResultOut,
-    EvaluationRunOut,
-    EvaluationRunSummaryOut,
-    MetricScoreOut,
-    RunProgress,
-)
-from agentforge_evaluators import CaseRecord, MetricRecord, compute_aggregates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,6 +25,17 @@ from agentforge_api.models.evaluation import (
     EvaluationRun,
     RunStatus,
 )
+from agentforge_core import schemas
+from agentforge_core.schemas import (
+    FIXTURE_BASED_LABEL,
+    LOCAL_DETERMINISTIC,
+    EvaluationResultOut,
+    EvaluationRunOut,
+    EvaluationRunSummaryOut,
+    MetricScoreOut,
+    RunProgress,
+)
+from agentforge_evaluators import CaseRecord, MetricRecord, compute_aggregates
 
 _ALLOWED: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.pending: frozenset({RunStatus.running, RunStatus.failed}),
@@ -51,7 +52,7 @@ class RunStateError(Exception):
 def transition(run: EvaluationRun, to: RunStatus, *, error_message: str | None = None) -> None:
     if to not in _ALLOWED[run.status]:
         raise RunStateError(f"run {run.id}: cannot go from {run.status.value} to {to.value}")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run.status = to
     if to == RunStatus.running:
         run.started_at = now
@@ -147,7 +148,7 @@ async def to_summary(session: AsyncSession, run: EvaluationRun) -> EvaluationRun
         provider_type=run.provider_type,
         labels=run_labels(run),
         evaluators=run.evaluators,
-        status=run.status,
+        status=schemas.RunStatus(run.status.value),
         error_message=run.error_message,
         created_at=run.created_at,
         started_at=run.started_at,
@@ -188,7 +189,7 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
                 output_tokens=r.output_tokens,
                 model=r.model,
                 latency_ms=r.latency_ms,
-                status=r.status,
+                status=schemas.ResultStatus(r.status.value),
                 passed=r.passed,
                 error_type=r.error_type,
                 error_message=r.error_message,

@@ -27,18 +27,18 @@ SQLite note: every column change here is a native ALTER TABLE, never an
 Alembic batch operation -- a batch rebuild of test_cases would silently drop
 the dataset immutability triggers created by b17cf04aecaf.
 """
+
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "c4e2a91d7b3f"
-down_revision: Union[str, None] = "b17cf04aecaf"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b17cf04aecaf"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _PG_TRIGGERS_UP = [
@@ -129,26 +129,55 @@ _METRIC_RUN_STATUS = (
 
 def _sqlite_trigger(name: str, when: str, table: str, condition: str, message: str) -> str:
     return (
-        f"CREATE TRIGGER {name} BEFORE {when} ON {table} WHEN {condition} "
-        f"BEGIN SELECT RAISE(ABORT, '{message}'); END;"
+        f"CREATE TRIGGER {name} BEFORE {when} ON {table} WHEN {condition} BEGIN SELECT RAISE(ABORT, '{message}'); END;"
     )
 
 
 _SQLITE_TRIGGERS = [
     ("trg_block_finished_run_update", "UPDATE", "evaluation_runs", f"OLD.status IN {_FINISHED}", _RUN_MSG),
     ("trg_block_finished_run_delete", "DELETE", "evaluation_runs", f"OLD.status IN {_FINISHED}", _RUN_MSG),
-    ("trg_block_finished_result_insert", "INSERT", "evaluation_results",
-     f"{_RESULT_RUN_STATUS.format(row='NEW')} IN {_FINISHED}", _RESULT_MSG),
-    ("trg_block_finished_result_update", "UPDATE", "evaluation_results",
-     f"{_RESULT_RUN_STATUS.format(row='OLD')} IN {_FINISHED}", _RESULT_MSG),
-    ("trg_block_finished_result_delete", "DELETE", "evaluation_results",
-     f"{_RESULT_RUN_STATUS.format(row='OLD')} IN {_FINISHED}", _RESULT_MSG),
-    ("trg_block_finished_metric_insert", "INSERT", "metric_scores",
-     f"{_METRIC_RUN_STATUS.format(row='NEW')} IN {_FINISHED}", _METRIC_MSG),
-    ("trg_block_finished_metric_update", "UPDATE", "metric_scores",
-     f"{_METRIC_RUN_STATUS.format(row='OLD')} IN {_FINISHED}", _METRIC_MSG),
-    ("trg_block_finished_metric_delete", "DELETE", "metric_scores",
-     f"{_METRIC_RUN_STATUS.format(row='OLD')} IN {_FINISHED}", _METRIC_MSG),
+    (
+        "trg_block_finished_result_insert",
+        "INSERT",
+        "evaluation_results",
+        f"{_RESULT_RUN_STATUS.format(row='NEW')} IN {_FINISHED}",
+        _RESULT_MSG,
+    ),
+    (
+        "trg_block_finished_result_update",
+        "UPDATE",
+        "evaluation_results",
+        f"{_RESULT_RUN_STATUS.format(row='OLD')} IN {_FINISHED}",
+        _RESULT_MSG,
+    ),
+    (
+        "trg_block_finished_result_delete",
+        "DELETE",
+        "evaluation_results",
+        f"{_RESULT_RUN_STATUS.format(row='OLD')} IN {_FINISHED}",
+        _RESULT_MSG,
+    ),
+    (
+        "trg_block_finished_metric_insert",
+        "INSERT",
+        "metric_scores",
+        f"{_METRIC_RUN_STATUS.format(row='NEW')} IN {_FINISHED}",
+        _METRIC_MSG,
+    ),
+    (
+        "trg_block_finished_metric_update",
+        "UPDATE",
+        "metric_scores",
+        f"{_METRIC_RUN_STATUS.format(row='OLD')} IN {_FINISHED}",
+        _METRIC_MSG,
+    ),
+    (
+        "trg_block_finished_metric_delete",
+        "DELETE",
+        "metric_scores",
+        f"{_METRIC_RUN_STATUS.format(row='OLD')} IN {_FINISHED}",
+        _METRIC_MSG,
+    ),
 ]
 
 
@@ -176,9 +205,7 @@ def upgrade() -> None:
     op.add_column("test_cases", sa.Column("expected_answer_regex", sa.String(), nullable=True))
 
     # -- evaluation_runs ---------------------------------------------------------
-    op.add_column(
-        "evaluation_runs", sa.Column("evaluators", sa.JSON(), nullable=False, server_default=sa.text("'[]'"))
-    )
+    op.add_column("evaluation_runs", sa.Column("evaluators", sa.JSON(), nullable=False, server_default=sa.text("'[]'")))
     for column in (
         sa.Column("adapter_type", sa.String(20), nullable=True),
         sa.Column("adapter_target", sa.String(2000), nullable=True),
@@ -191,12 +218,15 @@ def upgrade() -> None:
         op.add_column("evaluation_runs", column)
 
     if dialect == "postgresql":
-        op.execute("UPDATE evaluation_runs SET evaluators = json_build_array(evaluator_name || '@' || evaluator_version)")
+        op.execute(
+            "UPDATE evaluation_runs SET evaluators = json_build_array(evaluator_name || '@' || evaluator_version)"
+        )
     else:
         op.execute("UPDATE evaluation_runs SET evaluators = json_array(evaluator_name || '@' || evaluator_version)")
     op.execute(
         "UPDATE evaluation_runs SET status = 'failed', completed_at = created_at, "
-        "error_message = 'Phase 1 client-side run that never completed (marked failed by the evaluation engine migration)' "
+        "error_message = 'Phase 1 client-side run that never completed "
+        "(marked failed by the evaluation engine migration)' "
         "WHERE status = 'running'"
     )
 
@@ -212,7 +242,10 @@ def upgrade() -> None:
     if dialect == "postgresql":
         # SQLite's dynamic typing already stores floats in an INTEGER column.
         op.alter_column(
-            "evaluation_results", "latency_ms", type_=sa.Float(), existing_type=sa.Integer(),
+            "evaluation_results",
+            "latency_ms",
+            type_=sa.Float(),
+            existing_type=sa.Integer(),
             postgresql_using="latency_ms::double precision",
         )
 
@@ -246,7 +279,7 @@ def upgrade() -> None:
                er.passed, 'carried over from a Phase 1 client-side run', er.evidence,
                CASE WHEN r.provider_type = 'local-deterministic'
                     THEN {_json_literal(dialect, '["fixture-based"]')}
-                    ELSE {_json_literal(dialect, '[]')} END,
+                    ELSE {_json_literal(dialect, "[]")} END,
                er.created_at
         FROM evaluation_results er JOIN evaluation_runs r ON r.id = er.evaluation_run_id
         WHERE er.status = 'ok' AND er.score IS NOT NULL
@@ -271,7 +304,9 @@ def downgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
 
-    worker_runs = bind.execute(sa.text("SELECT COUNT(*) FROM evaluation_runs WHERE adapter_type IS NOT NULL")).scalar_one()
+    worker_runs = bind.execute(
+        sa.text("SELECT COUNT(*) FROM evaluation_runs WHERE adapter_type IS NOT NULL")
+    ).scalar_one()
     if worker_runs:
         raise RuntimeError(
             f"cannot downgrade: {worker_runs} worker-executed evaluation run(s) exist, and the previous "
@@ -320,14 +355,23 @@ def downgrade() -> None:
 
     if dialect == "postgresql":
         op.alter_column(
-            "evaluation_results", "latency_ms", type_=sa.Integer(), existing_type=sa.Float(),
+            "evaluation_results",
+            "latency_ms",
+            type_=sa.Integer(),
+            existing_type=sa.Float(),
             postgresql_using="round(latency_ms)::integer",
         )
     for column in ("error_type", "model", "output_tokens", "input_tokens", "citations"):
         op.drop_column("evaluation_results", column)
     for column in (
-        "started_at", "aggregates", "error_message", "max_latency_ms", "timeout_seconds",
-        "adapter_target", "adapter_type", "evaluators",
+        "started_at",
+        "aggregates",
+        "error_message",
+        "max_latency_ms",
+        "timeout_seconds",
+        "adapter_target",
+        "adapter_type",
+        "evaluators",
     ):
         op.drop_column("evaluation_runs", column)
     op.drop_column("test_cases", "expected_answer_regex")

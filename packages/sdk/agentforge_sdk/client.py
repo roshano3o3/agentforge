@@ -38,7 +38,7 @@ class AgentForgeClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "AgentForgeClient":
+    def __enter__(self) -> AgentForgeClient:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -68,11 +68,20 @@ class AgentForgeClient:
         _raise_for_status(resp)
         return resp.json()
 
-    def create_draft_version(self, dataset_id: str, test_cases: list[dict[str, Any]]) -> dict[str, Any]:
-        """Creates a new DRAFT dataset version (optionally pre-populated).
-        Does not publish it -- call `publish_dataset_version` for that.
+    def create_draft_version(
+        self,
+        dataset_id: str,
+        test_cases: list[dict[str, Any]],
+        default_evaluators: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Creates a new DRAFT dataset version (optionally pre-populated, with
+        an optional version-level evaluator config). Does not publish it --
+        call `publish_dataset_version` for that.
         """
-        resp = self._client.post(f"/datasets/{dataset_id}/versions", json={"test_cases": test_cases})
+        resp = self._client.post(
+            f"/datasets/{dataset_id}/versions",
+            json={"test_cases": test_cases, "default_evaluators": default_evaluators},
+        )
         _raise_for_status(resp)
         return resp.json()
 

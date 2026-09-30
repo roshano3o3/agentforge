@@ -7,6 +7,7 @@ completed or failed and prints the persisted results.
 
 from __future__ import annotations
 
+import io
 import sys
 import time
 from pathlib import Path
@@ -22,17 +23,18 @@ from rich.table import Table
 # CI runner, regardless of the host's console code page.
 if sys.platform == "win32":
     for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+        if isinstance(_stream, io.TextIOWrapper):
+            try:
+                _stream.reconfigure(encoding="utf-8")
+            except ValueError:
+                pass
 
-from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
-from agentforge_sdk import AgentForgeClient
 from pydantic import ValidationError
 
 from agentforge_cli.dataset_io import DatasetFileError, validate_dataset_file
 from agentforge_cli.git_utils import current_commit_sha
+from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
+from agentforge_sdk import AgentForgeClient
 
 app = typer.Typer(add_completion=False, help="AgentForge command-line interface.")
 dataset_app = typer.Typer(add_completion=False, help="Manage evaluation datasets.")
@@ -80,14 +82,20 @@ def init(
 def dataset_validate(file: Path = typer.Argument(..., help="Path to a dataset YAML file.")) -> None:
     """Validate a dataset YAML file's structure offline (no API call, no DB)."""
     try:
-        name, _description, test_cases = validate_dataset_file(file)
+        name, _description, test_cases, default_evaluators = validate_dataset_file(file)
     except DatasetFileError as exc:
         console.print(f"[red]Invalid dataset:[/red] {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     console.print(f"[green]Valid[/green] dataset '{name}' with {len(test_cases)} test case(s):")
+    defaults = sorted(default_evaluators or {})
+    console.print(f"  default evaluators: {', '.join(defaults) if default_evaluators is not None else '(all)'}")
     for tc in test_cases:
-        console.print(f"  - {tc.case_key} ({len(tc.expected_context)} expected doc id(s))")
+        overrides = ", ".join(f"-{k}" if v is False else f"+{k}" for k, v in sorted((tc.evaluators or {}).items()))
+        console.print(
+            f"  - {tc.case_key} ({len(tc.expected_context)} expected doc id(s))"
+            + (f"  evaluators: {overrides}" if overrides else "")
+        )
 
 
 @dataset_app.command("publish")
@@ -103,10 +111,10 @@ def dataset_publish(
     draft-then-publish path the UI uses.
     """
     try:
-        name, description, test_cases = validate_dataset_file(file)
+        name, description, test_cases, default_evaluators = validate_dataset_file(file)
     except DatasetFileError as exc:
         console.print(f"[red]Invalid dataset:[/red] {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     with AgentForgeClient(base_url=api_url) as client:
         try:
@@ -114,11 +122,12 @@ def dataset_publish(
             draft = client.create_draft_version(
                 dataset_id=dataset["id"],
                 test_cases=[tc.model_dump() for tc in test_cases],
+                default_evaluators=default_evaluators,
             )
             version = client.publish_dataset_version(dataset_name=name, version=draft["version"])
         except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
             console.print(f"[red]Failed to publish dataset:[/red] {exc}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
 
     console.print(
         f"[green]Published[/green] dataset '{name}' version {version['version']} "
@@ -167,9 +176,11 @@ def evaluate(
     if (adapter is None) == (adapter_url is None):
         raise typer.BadParameter("pass exactly one of --adapter or --adapter-url")
     try:
-        adapter_spec = (
-            AdapterSpec(type="python", target=adapter) if adapter else AdapterSpec(type="http", target=adapter_url)
-        )
+        if adapter is not None:
+            adapter_spec = AdapterSpec(type="python", target=adapter)
+        else:
+            assert adapter_url is not None  # exactly one was given (checked above)
+            adapter_spec = AdapterSpec(type="http", target=adapter_url)
     except ValidationError as exc:
         raise typer.BadParameter(exc.errors()[0]["msg"]) from exc
     evaluator_list = [e.strip() for e in evaluators.split(",") if e.strip()] if evaluators else None
@@ -196,7 +207,7 @@ def evaluate(
             )
         except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
             console.print(f"[red]Setup failed:[/red] {exc}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
 
         console.print(
             f"Submitted run [bold]{run['id']}[/bold]: {app_name}@{app_version} against "
@@ -218,7 +229,7 @@ def evaluate(
                 run = client.get_run(run["id"])
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[red]Lost contact with the API while waiting:[/red] {exc}")
-                raise typer.Exit(code=1)
+                raise typer.Exit(code=1) from None
             line = f"  {run['status']}: {run['progress']['completed_cases']}/{run['progress']['total_cases']} case(s)"
             if line != last_line:
                 console.print(line)
@@ -275,7 +286,9 @@ def _print_run(run: dict[str, Any]) -> None:
             f"{agg['error_count']} error, {agg['timeout_count']} timeout - "
             f"pass_rate=[bold]{_fmt(agg['pass_rate'], '.0%')}[/bold] (threshold={run['threshold']})"
         )
-        console.print(f"latency p50={_fmt(lat['p50'], '.1f', 'ms')} p95={_fmt(lat['p95'], '.1f', 'ms')} ({lat['basis']})")
+        console.print(
+            f"latency p50={_fmt(lat['p50'], '.1f', 'ms')} p95={_fmt(lat['p95'], '.1f', 'ms')} ({lat['basis']})"
+        )
         cost = agg.get("estimated_cost_usd")
         if cost:
             console.print(
@@ -318,7 +331,7 @@ def runs_list(api_url: str = typer.Option(DEFAULT_API_URL, "--api-url")) -> None
             runs = client.list_runs()
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Could not reach API:[/red] {exc}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
 
     if not runs:
         console.print("No runs yet. Run `agentforge evaluate ...` first.")
@@ -359,7 +372,7 @@ def runs_show(
             run = client.get_run(run_id)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Could not fetch run:[/red] {exc}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
     _print_run(run)
 
 

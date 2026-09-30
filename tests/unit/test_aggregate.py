@@ -20,7 +20,9 @@ def _metric(name: str, **kw) -> MetricRecord:
 
 def test_compute_aggregates() -> None:
     cases = [
-        CaseRecord("ok", True, 10.0, [_metric("m", score=1.0, passed=True), _metric("estimated_cost", value=0.5, unit="usd")]),
+        CaseRecord(
+            "ok", True, 10.0, [_metric("m", score=1.0, passed=True), _metric("estimated_cost", value=0.5, unit="usd")]
+        ),
         CaseRecord("ok", False, 30.0, [_metric("m", score=0.5, passed=False), _metric("estimated_cost")]),
         CaseRecord("timeout", False, 5000.0, []),
         CaseRecord("error", False, 1.0, []),

@@ -3,14 +3,13 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { API_PORT } from "./ports";
+import { PYTHON, REPO_ROOT } from "./env";
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const VENV_PYTHON = path.join(REPO_ROOT, ".venv", "Scripts", "python.exe");
 const API_URL = `http://127.0.0.1:${API_PORT}`;
 const SCREENSHOT_DIR = path.join(REPO_ROOT, "docs", "screenshots");
 
 function runCli(args: string[]) {
-  execFileSync(VENV_PYTHON, ["-m", "agentforge_cli.main", ...args, "--api-url", API_URL], {
+  execFileSync(PYTHON, ["-m", "agentforge_cli.main", ...args, "--api-url", API_URL], {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env: { ...process.env, PYTHONIOENCODING: "utf-8" },

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from fastapi import APIRouter
+
 from agentforge_core.schemas import EvaluatorOut
 from agentforge_evaluators import list_evaluators
-from fastapi import APIRouter
 
 router = APIRouter(prefix="/evaluators", tags=["evaluators"])
 

@@ -1,4 +1,24 @@
-"""Loading and validating dataset YAML files offline (no network call)."""
+"""Loading and validating dataset YAML files offline (no network call).
+
+    name: <dataset name>
+    description: <optional>
+    defaults:
+      evaluators:                 # version-level default evaluator config
+        heuristic_context_precision: {}
+        latency: {max_ms: 500}
+    test_cases:
+      - id: <case key>
+        input: <question>
+        expected_answer: <optional reference answer>
+        expected_context: [<doc id>, ...]
+        tags: [...]
+        evaluators:               # optional per-case overrides/additions
+          answer_contains: {phrases: ["45 days"]}
+          heuristic_context_precision: false   # drop a default for this case
+
+Evaluator configs are validated against the same registry the API uses, so
+"valid offline" means the API will accept it.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +29,10 @@ import yaml
 from pydantic import ValidationError
 
 from agentforge_core.schemas import DatasetVersionTestCasesRequest, TestCaseIn
+from agentforge_evaluators import EvaluatorConfigError, validate_config
+
+_TOP_LEVEL_KEYS = {"name", "description", "defaults", "test_cases"}
+_CASE_KEYS = {"id", "input", "expected_answer", "expected_context", "tags", "evaluators"}
 
 
 class DatasetFileError(Exception):
@@ -26,19 +50,31 @@ def load_dataset_file(path: Path) -> dict[str, Any]:
         raise DatasetFileError(f"{path}: missing required top-level key 'name'")
     if "test_cases" not in raw:
         raise DatasetFileError(f"{path}: missing required top-level key 'test_cases'")
+    unknown = sorted(set(raw) - _TOP_LEVEL_KEYS)
+    if unknown:
+        raise DatasetFileError(f"{path}: unknown top-level key(s) {unknown}")
     return raw
 
 
-def validate_dataset_file(path: Path) -> tuple[str, str | None, list[TestCaseIn]]:
-    """Validate a dataset YAML file's structure and test-case schema.
+def validate_dataset_file(
+    path: Path,
+) -> tuple[str, str | None, list[TestCaseIn], dict[str, Any] | None]:
+    """Validate a dataset YAML file's structure, test cases and evaluator configs.
 
-    Returns (dataset_name, description, validated_test_cases). Raises
-    DatasetFileError or pydantic.ValidationError with a human-readable
-    message on any problem.
+    Returns (dataset_name, description, validated_test_cases, default_evaluators).
+    Raises DatasetFileError with a human-readable message on any problem.
     """
     raw = load_dataset_file(path)
     name = raw["name"]
     description = raw.get("description")
+
+    defaults = raw.get("defaults") or {}
+    if not isinstance(defaults, dict) or set(defaults) - {"evaluators"}:
+        raise DatasetFileError(f"{path}: 'defaults' may only contain 'evaluators'")
+    try:
+        default_evaluators = validate_config(defaults.get("evaluators"), allow_disable=False)
+    except EvaluatorConfigError as exc:
+        raise DatasetFileError(f"{path}: defaults.evaluators: {exc}") from exc
 
     raw_cases = raw["test_cases"]
     if not isinstance(raw_cases, list) or not raw_cases:
@@ -50,16 +86,22 @@ def validate_dataset_file(path: Path) -> tuple[str, str | None, list[TestCaseIn]
             raise DatasetFileError(f"{path}: test_cases[{i}] must be a mapping")
         if "id" not in case:
             raise DatasetFileError(f"{path}: test_cases[{i}] is missing required key 'id'")
+        unknown = sorted(set(case) - _CASE_KEYS)
+        if unknown:
+            raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') has unknown key(s) {unknown}")
+        try:
+            evaluators = validate_config(case.get("evaluators"))
+        except EvaluatorConfigError as exc:
+            raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') evaluators: {exc}") from exc
         try:
             test_cases.append(
                 TestCaseIn(
                     case_key=case["id"],
                     input=case.get("input", ""),
                     expected_answer=case.get("expected_answer"),
-                    expected_answer_contains=case.get("expected_answer_contains") or [],
-                    expected_answer_regex=case.get("expected_answer_regex"),
                     expected_context=case.get("expected_context") or [],
                     tags=case.get("tags") or [],
+                    evaluators=evaluators,
                 )
             )
         except ValidationError as exc:
@@ -69,8 +111,8 @@ def validate_dataset_file(path: Path) -> tuple[str, str | None, list[TestCaseIn]
     # schema the API uses, so "valid offline" really means "the API will
     # accept this".
     try:
-        DatasetVersionTestCasesRequest(test_cases=test_cases)
+        DatasetVersionTestCasesRequest(test_cases=test_cases, default_evaluators=default_evaluators)
     except ValidationError as exc:
         raise DatasetFileError(f"{path}: {exc}") from exc
 
-    return name, description, test_cases
+    return name, description, test_cases, default_evaluators

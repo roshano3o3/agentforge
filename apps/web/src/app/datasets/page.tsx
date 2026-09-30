@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError, createDataset, listDatasets } from "@/lib/api";
 import type { Dataset } from "@/lib/types";
 
@@ -16,20 +16,26 @@ export default function DatasetsPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
 
-  function load() {
-    setState("loading");
-    listDatasets()
-      .then((data) => {
-        setDatasets(data);
-        setState("ready");
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Unexpected error loading datasets.");
-        setState("error");
-      });
-  }
+  // State is only set in promise callbacks (never synchronously inside the
+  // effect); a reload after creating keeps the current list on screen.
+  const load = useCallback(
+    () =>
+      listDatasets().then(
+        (data) => {
+          setDatasets(data);
+          setState("ready");
+        },
+        (err: unknown) => {
+          setError(err instanceof ApiError ? err.message : "Unexpected error loading datasets.");
+          setState("error");
+        },
+      ),
+    [],
+  );
 
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();

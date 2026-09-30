@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -98,31 +98,30 @@ class DatasetOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# An evaluator config: {"<name or name@version>": {params} | true | false}.
+# Validated against the evaluator registry by the API (and the CLI, offline);
+# see packages/evaluators/agentforge_evaluators/config.py for semantics.
+EvaluatorConfigIn = dict[str, Any]
+
+
 class TestCaseIn(BaseModel):
+    # Unknown fields are rejected, not silently dropped: a typo'd or retired
+    # field (e.g. Phase 2's expected_answer_contains) must not vanish quietly.
+    model_config = {"extra": "forbid"}
+
     case_key: str = Field(min_length=1, max_length=200)
     input: str = Field(min_length=1)
     expected_answer: str | None = None
-    expected_answer_contains: list[str] = Field(default_factory=list)
-    expected_answer_regex: str | None = None
     expected_context: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    # None = use the dataset version's default_evaluators as-is.
+    evaluators: EvaluatorConfigIn | None = None
 
-    @field_validator("expected_context", "tags", "expected_answer_contains")
+    @field_validator("expected_context", "tags")
     @classmethod
     def no_blank_entries(cls, v: list[str]) -> list[str]:
         if any(not item.strip() for item in v):
             raise ValueError("list entries must not be blank")
-        return v
-
-    @field_validator("expected_answer_regex")
-    @classmethod
-    def valid_regex(cls, v: str | None) -> str | None:
-        if v is None or not v.strip():
-            return None
-        try:
-            re.compile(v)
-        except re.error as exc:
-            raise ValueError(f"expected_answer_regex is not a valid regular expression: {exc}") from exc
         return v
 
 
@@ -133,9 +132,15 @@ class DatasetVersionTestCasesRequest(BaseModel):
     what's currently stored (by case_key) and applies inserts/updates/
     deletes accordingly; it is not a partial merge. An empty list is valid
     (an empty draft, or "delete everything currently in this draft").
+
+    `default_evaluators` is the version-level evaluator config. On PATCH it
+    is only changed when the field is present in the body (null clears it).
     """
 
+    model_config = {"extra": "forbid"}
+
     test_cases: list[TestCaseIn] = Field(default_factory=list)
+    default_evaluators: EvaluatorConfigIn | None = None
 
     @field_validator("test_cases")
     @classmethod
@@ -152,10 +157,14 @@ class TestCaseOut(BaseModel):
     case_key: str
     input: str
     expected_answer: str | None
-    expected_answer_contains: list[str]
-    expected_answer_regex: str | None
     expected_context: list[str]
     tags: list[str]
+    evaluators: EvaluatorConfigIn | None
+    # Read-only legacy fields from Phase 2 datasets (published before per-case
+    # config existed). The worker still honors them for those versions; new
+    # data can't set them -- use `evaluators` instead.
+    expected_answer_contains: list[str]
+    expected_answer_regex: str | None
 
     model_config = {"from_attributes": True}
 
@@ -167,6 +176,7 @@ class DatasetVersionOut(BaseModel):
     status: DatasetVersionStatus
     created_at: datetime
     published_at: datetime | None
+    default_evaluators: EvaluatorConfigIn | None
     test_cases: list[TestCaseOut]
 
     model_config = {"from_attributes": True}
@@ -186,7 +196,7 @@ class AdapterSpec(BaseModel):
     target: str = Field(min_length=1, max_length=2000)
 
     @model_validator(mode="after")
-    def target_matches_type(self) -> "AdapterSpec":
+    def target_matches_type(self) -> AdapterSpec:
         if self.type == "python" and not _PYTHON_TARGET.match(self.target):
             raise ValueError("python adapter target must be 'module.path:function_name'")
         if self.type == "http" and not self.target.startswith(("http://", "https://")):
@@ -292,5 +302,3 @@ class EvaluatorOut(BaseModel):
     key: str
     kind: str
     description: str
-
-

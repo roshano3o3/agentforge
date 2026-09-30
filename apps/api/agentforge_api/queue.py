@@ -40,7 +40,9 @@ class ArqRunQueue:
             job = await self._pool.enqueue_job(EXECUTE_RUN_JOB, run_id, _job_id=f"run:{run_id}")
         except Exception as exc:  # noqa: BLE001 - any Redis/connection failure
             self._pool = None
-            raise QueueUnavailableError(f"could not enqueue run on {self._settings.host}:{self._settings.port}: {exc}") from exc
+            raise QueueUnavailableError(
+                f"could not enqueue run on {self._settings.host}:{self._settings.port}: {exc}"
+            ) from exc
         if job is None:
             raise QueueUnavailableError(f"run {run_id} is already queued")
 

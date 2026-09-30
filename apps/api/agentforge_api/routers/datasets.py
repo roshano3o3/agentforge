@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from agentforge_core.schemas import DatasetCreate, DatasetOut, DatasetVersionOut, DatasetVersionTestCasesRequest
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +9,8 @@ from sqlalchemy.orm import selectinload
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.dataset import Dataset, DatasetVersion, DatasetVersionStatus, TestCase
+from agentforge_core.schemas import DatasetCreate, DatasetOut, DatasetVersionOut, DatasetVersionTestCasesRequest
+from agentforge_evaluators import EvaluatorConfigError, validate_config
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -35,17 +36,51 @@ async def upsert_dataset(payload: DatasetCreate, session: AsyncSession = Depends
 _CASE_FIELDS = (
     "input",
     "expected_answer",
-    "expected_answer_contains",
-    "expected_answer_regex",
     "expected_context",
     "tags",
+    "evaluators",
 )
 
 
 def _case_values(source: object) -> dict:
-    """The copyable content of a test case (a TestCaseIn or a TestCase row).
+    """The writable content of a test case (a TestCaseIn or a TestCase row).
     One list, so create / PATCH / new-draft can't drift on which fields they carry."""
     return {name: getattr(source, name) for name in _CASE_FIELDS}
+
+
+def _validated(payload: DatasetVersionTestCasesRequest) -> DatasetVersionTestCasesRequest:
+    """Check every evaluator config against the registry (names, versions,
+    params) before anything is written. 422 names the case and the problem."""
+    try:
+        payload.default_evaluators = validate_config(payload.default_evaluators, allow_disable=False)
+        for tc in payload.test_cases:
+            try:
+                tc.evaluators = validate_config(tc.evaluators)
+            except EvaluatorConfigError as exc:
+                raise EvaluatorConfigError(f"test case '{tc.case_key}': {exc}") from exc
+    except EvaluatorConfigError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid evaluator config: {exc}") from exc
+    return payload
+
+
+def _carried_over_config(tc: TestCase) -> dict | None:
+    """A copied case's config, with Phase 2 legacy answer assertions turned
+    into explicit params. Only used for new drafts: published rows are never
+    rewritten, and the worker maps legacy fields at run time instead."""
+    config = dict(tc.evaluators) if tc.evaluators is not None else None
+    legacy: dict = {}
+    if tc.expected_answer_contains:
+        legacy["answer_contains"] = {"phrases": list(tc.expected_answer_contains)}
+    if tc.expected_answer_regex:
+        legacy["answer_regex"] = {"pattern": tc.expected_answer_regex}
+    if not legacy:
+        return config
+    config = config or {}
+    configured = {key.partition("@")[0] for key in config}
+    for name, params in legacy.items():
+        if name not in configured:
+            config[name] = params
+    return config
 
 
 async def _load_version_with_cases(version_id: str, session: AsyncSession) -> DatasetVersion:
@@ -56,9 +91,7 @@ async def _load_version_with_cases(version_id: str, session: AsyncSession) -> Da
     return row
 
 
-async def _apply_test_cases(
-    version_id: str, payload: DatasetVersionTestCasesRequest, session: AsyncSession
-) -> None:
+async def _apply_test_cases(version_id: str, payload: DatasetVersionTestCasesRequest, session: AsyncSession) -> None:
     """Replace the version's test cases with exactly `payload.test_cases`,
     diffed by case_key: matching keys are updated in place, missing keys are
     deleted, new keys are inserted. Caller is responsible for having already
@@ -76,9 +109,9 @@ async def _apply_test_cases(
     existing_by_key = {tc.case_key: tc for tc in existing_rows}
     incoming_keys = {tc.case_key for tc in payload.test_cases}
 
-    for case_key, existing_tc in existing_by_key.items():
+    for case_key, stale_tc in existing_by_key.items():
         if case_key not in incoming_keys:
-            await session.delete(existing_tc)
+            await session.delete(stale_tc)
 
     for tc in payload.test_cases:
         existing_tc = existing_by_key.get(tc.case_key)
@@ -102,13 +135,19 @@ async def create_draft_version(
     dataset = await session.get(Dataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail=f"dataset '{dataset_id}' not found")
+    payload = _validated(payload)
 
     latest_version = await session.scalar(
         select(func.max(DatasetVersion.version)).where(DatasetVersion.dataset_id == dataset_id)
     )
     next_version = (latest_version or 0) + 1
 
-    version_row = DatasetVersion(dataset_id=dataset_id, version=next_version, status=DatasetVersionStatus.draft)
+    version_row = DatasetVersion(
+        dataset_id=dataset_id,
+        version=next_version,
+        status=DatasetVersionStatus.draft,
+        default_evaluators=payload.default_evaluators,
+    )
     session.add(version_row)
     await session.flush()
 
@@ -143,14 +182,16 @@ async def _get_version_or_404(
         # "latest" means latest PUBLISHED version -- evaluating against a
         # draft would break the reproducibility guarantee that a run's
         # dataset_version never changes underneath it.
-        query = query.where(DatasetVersion.status == DatasetVersionStatus.published).order_by(
-            DatasetVersion.version.desc()
-        ).limit(1)
+        query = (
+            query.where(DatasetVersion.status == DatasetVersionStatus.published)
+            .order_by(DatasetVersion.version.desc())
+            .limit(1)
+        )
     else:
         try:
             version_int = int(version)
         except ValueError:
-            raise HTTPException(status_code=400, detail="version must be an integer or 'latest'")
+            raise HTTPException(status_code=400, detail="version must be an integer or 'latest'") from None
         query = query.where(DatasetVersion.version == version_int)
 
     row = await session.scalar(query)
@@ -188,7 +229,14 @@ async def edit_draft_version(
                 "version copied from this one instead."
             ),
         )
-
+    # Only touched when sent: a client editing test cases (e.g. the dashboard)
+    # must not wipe the version's default config by omitting it. Checked
+    # before _validated(), whose normalizing assignment would mark the field
+    # as set.
+    default_sent = "default_evaluators" in payload.model_fields_set
+    payload = _validated(payload)
+    if default_sent:
+        version_row.default_evaluators = payload.default_evaluators
     await _apply_test_cases(version_row.id, payload, session)
     await session.commit()
     return await _load_version_with_cases(version_row.id, session)
@@ -208,7 +256,7 @@ async def publish_version(name: str, version: str, session: AsyncSession = Depen
         raise HTTPException(status_code=400, detail="cannot publish a version with zero test cases")
 
     version_row.status = DatasetVersionStatus.published
-    version_row.published_at = datetime.now(timezone.utc)
+    version_row.published_at = datetime.now(UTC)
     await session.commit()
     return await _load_version_with_cases(version_row.id, session)
 
@@ -229,12 +277,18 @@ async def new_draft_from_version(
     )
     next_version = (latest_version or 0) + 1
 
-    new_row = DatasetVersion(dataset_id=source.dataset_id, version=next_version, status=DatasetVersionStatus.draft)
+    new_row = DatasetVersion(
+        dataset_id=source.dataset_id,
+        version=next_version,
+        status=DatasetVersionStatus.draft,
+        default_evaluators=source.default_evaluators,
+    )
     session.add(new_row)
     await session.flush()
 
     for tc in source.test_cases:
-        session.add(TestCase(dataset_version_id=new_row.id, case_key=tc.case_key, **_case_values(tc)))
+        values = {**_case_values(tc), "evaluators": _carried_over_config(tc)}
+        session.add(TestCase(dataset_version_id=new_row.id, case_key=tc.case_key, **values))
 
     await session.commit()
     return await _load_version_with_cases(new_row.id, session)
@@ -263,7 +317,5 @@ async def list_dataset_versions(name: str, session: AsyncSession = Depends(get_s
 
 
 @router.get("/{name}/versions/{version}", response_model=DatasetVersionOut)
-async def get_dataset_version(
-    name: str, version: str, session: AsyncSession = Depends(get_session)
-) -> DatasetVersion:
+async def get_dataset_version(name: str, version: str, session: AsyncSession = Depends(get_session)) -> DatasetVersion:
     return await _get_version_or_404(name, version, session)

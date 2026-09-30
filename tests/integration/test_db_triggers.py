@@ -54,10 +54,16 @@ async def test_raw_update_on_published_test_cases_is_blocked(
     version_id = await _version_id(client, sample_test_cases, publish=True)
 
     with pytest.raises(DBAPIError, match=TEST_CASES_IMMUTABLE):
-        await _execute(raw_engine, "UPDATE test_cases SET input = 'tampered' WHERE dataset_version_id = :v", v=version_id)
+        await _execute(
+            raw_engine, "UPDATE test_cases SET input = 'tampered' WHERE dataset_version_id = :v", v=version_id
+        )
 
     async with raw_engine.connect() as conn:
-        inputs = (await conn.execute(text("SELECT input FROM test_cases WHERE dataset_version_id = :v"), {"v": version_id})).scalars().all()
+        inputs = (
+            (await conn.execute(text("SELECT input FROM test_cases WHERE dataset_version_id = :v"), {"v": version_id}))
+            .scalars()
+            .all()
+        )
     assert sorted(inputs) == sorted(tc["input"] for tc in sample_test_cases)
 
 
@@ -82,7 +88,7 @@ async def test_raw_unpublish_is_blocked(
 ) -> None:
     version_id = await _version_id(client, sample_test_cases, publish=True)
 
-    with pytest.raises(DBAPIError, match="a published dataset_version can never move back to draft"):
+    with pytest.raises(DBAPIError, match="a published dataset_version is immutable"):
         await _execute(raw_engine, "UPDATE dataset_versions SET status = 'draft' WHERE id = :v", v=version_id)
 
 
@@ -92,7 +98,9 @@ async def test_raw_update_on_a_draft_is_allowed(
     # Control: the trigger blocks published versions only, not all writes.
     version_id = await _version_id(client, sample_test_cases, publish=False)
 
-    updated = await _execute(raw_engine, "UPDATE test_cases SET input = 'edited' WHERE dataset_version_id = :v", v=version_id)
+    updated = await _execute(
+        raw_engine, "UPDATE test_cases SET input = 'edited' WHERE dataset_version_id = :v", v=version_id
+    )
     assert updated == len(sample_test_cases)
 
 
@@ -168,7 +176,8 @@ async def test_raw_writes_to_a_completed_runs_results_and_metrics_are_blocked(
             "INSERT INTO evaluation_results (id, evaluation_run_id, test_case_id, retrieved_doc_ids, citations, "
             "latency_ms, status, created_at) VALUES ('forged', :r, :t, CAST('[]' AS JSON), CAST('[]' AS JSON), "
             "1, 'ok', now())",
-            r=run_id, t=test_case_id,
+            r=run_id,
+            t=test_case_id,
         )
     with pytest.raises(DBAPIError, match=METRICS_IMMUTABLE):
         await _execute(raw_engine, "UPDATE metric_scores SET score = 1.0 WHERE evaluation_result_id = :i", i=result_id)
@@ -189,3 +198,33 @@ async def test_raw_writes_to_a_running_run_are_allowed(
     # able to write while a run is in progress.
     run_id = await _executed_run(client, session_factory, sample_test_cases, finish=False)
     assert await _execute(raw_engine, "UPDATE evaluation_runs SET environment = 'x' WHERE id = :r", r=run_id) == 1
+
+
+async def test_raw_update_of_a_published_versions_evaluator_config_is_blocked(
+    client: AsyncClient, raw_engine: AsyncEngine, sample_test_cases: list[dict]
+) -> None:
+    version_id = await _version_id(client, sample_test_cases, publish=True)
+
+    for sql in (
+        "UPDATE dataset_versions SET default_evaluators = CAST('{\"latency\": {}}' AS JSON) WHERE id = :v",
+        "UPDATE dataset_versions SET version = 99 WHERE id = :v",
+        "UPDATE dataset_versions SET published_at = now() WHERE id = :v",
+    ):
+        with pytest.raises(DBAPIError, match="a published dataset_version is immutable"):
+            await _execute(raw_engine, sql, v=version_id)
+    with pytest.raises(DBAPIError, match=TEST_CASES_IMMUTABLE):
+        await _execute(
+            raw_engine,
+            "UPDATE test_cases SET evaluators = CAST('{\"latency\": {}}' AS JSON) WHERE dataset_version_id = :v",
+            v=version_id,
+        )
+
+
+async def test_raw_update_of_a_draft_versions_evaluator_config_is_allowed(
+    client: AsyncClient, raw_engine: AsyncEngine, sample_test_cases: list[dict]
+) -> None:
+    version_id = await _version_id(client, sample_test_cases, publish=False)
+    updated = await _execute(
+        raw_engine, "UPDATE dataset_versions SET default_evaluators = CAST('{}' AS JSON) WHERE id = :v", v=version_id
+    )
+    assert updated == 1

@@ -3,16 +3,23 @@
 Like `heuristic_context_precision`, these are set-overlap heuristics over
 hand-labeled document IDs -- not the RAGAS metrics of similar names and not
 LLM judgments of relevance.
+
+Per-case param for all three: `expected_context: [doc id, ...]` (default: the
+case's own expected_context).
 """
 
 from __future__ import annotations
 
-from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome, not_applicable
+from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome, Params, not_applicable
 from agentforge_evaluators.heuristic_context_precision import heuristic_context_precision
 
 
-def context_precision(case: EvalInput, config: EvalConfig) -> MetricOutcome:
-    result = heuristic_context_precision(case.retrieved_doc_ids, case.expected_context)
+def _expected(case: EvalInput, params: Params) -> list[str]:
+    return list(params.get("expected_context", case.expected_context))
+
+
+def context_precision(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
+    result = heuristic_context_precision(case.retrieved_doc_ids, _expected(case, params))
     passed = result.score >= config.threshold
     if result.evidence["no_documents_retrieved"]:
         reason = "no documents retrieved (defined as 0.0)"
@@ -25,10 +32,10 @@ def context_precision(case: EvalInput, config: EvalConfig) -> MetricOutcome:
     return MetricOutcome(score=result.score, passed=passed, reason=reason, evidence=result.evidence)
 
 
-def context_recall(case: EvalInput, config: EvalConfig) -> MetricOutcome:
-    expected = set(case.expected_context)
+def context_recall(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
+    expected = set(_expected(case, params))
     if not expected:
-        return not_applicable("test case has no expected_context, so recall is undefined")
+        return not_applicable("no expected context for this case, so recall is undefined")
     retrieved = set(case.retrieved_doc_ids)
     found = retrieved & expected
     score = len(found) / len(expected)
@@ -50,7 +57,7 @@ def context_recall(case: EvalInput, config: EvalConfig) -> MetricOutcome:
     )
 
 
-def citation_correctness(case: EvalInput, config: EvalConfig) -> MetricOutcome:
+def citation_correctness(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
     """Of the documents the answer cites, what fraction are expected-relevant.
 
     A citation to a document that wasn't even retrieved is "unsupported" (the
@@ -58,7 +65,7 @@ def citation_correctness(case: EvalInput, config: EvalConfig) -> MetricOutcome:
     score. Citing nothing is correct only when nothing was expected.
     """
     cited = list(dict.fromkeys(case.citations))  # de-duplicate, keep order
-    expected = set(case.expected_context)
+    expected = set(_expected(case, params))
     retrieved = set(case.retrieved_doc_ids)
 
     if not cited:

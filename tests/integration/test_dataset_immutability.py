@@ -124,7 +124,9 @@ async def test_new_draft_from_published_version_copies_test_cases_into_a_fresh_d
     # v2 is independently editable -- editing it never touches v1.
     await client.patch(
         f"/datasets/support/versions/{v2['version']}",
-        json={"test_cases": [{"case_key": "case-1", "input": "changed in v2 only", "expected_context": [], "tags": []}]},
+        json={
+            "test_cases": [{"case_key": "case-1", "input": "changed in v2 only", "expected_context": [], "tags": []}]
+        },
     )
     v1_refetched = (await client.get("/datasets/support/versions/1")).json()
     assert v1_refetched["test_cases"][0]["input"] == sample_test_cases[0]["input"]
@@ -144,9 +146,7 @@ async def test_latest_resolves_to_highest_published_version_only(
     assert latest["status"] == "published"
 
 
-async def test_latest_404s_when_no_published_version_exists(
-    client: AsyncClient, sample_test_cases: list[dict]
-) -> None:
+async def test_latest_404s_when_no_published_version_exists(client: AsyncClient, sample_test_cases: list[dict]) -> None:
     dataset = await _create_dataset(client)
     await _create_draft(client, dataset["id"], sample_test_cases)  # draft only, never published
 
