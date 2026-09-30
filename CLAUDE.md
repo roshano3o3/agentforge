@@ -41,7 +41,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   dedicated worker containers; dev uses `agentforge` + Redis DB 0. Never point tests at dev.
 - Next.js dev server locks per project dir: stop `dev-web.ps1` before running `test-ui.ps1`.
 - Lint locally before pushing: `ruff check .`, `ruff format --check .`, `mypy` (venv), and in
-  `apps/web`: `npx eslint src e2e playwright.config.ts`, `npx tsc --noEmit`.
+  `apps/web`: `npx eslint src e2e playwright.config.ts`, `npm run typecheck` (next typegen + tsc).
 - PowerShell 5.1: native stderr + `$ErrorActionPreference="Stop"` aborts when output is redirected —
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).

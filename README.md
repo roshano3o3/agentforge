@@ -137,7 +137,7 @@ See [`docs/architecture.md`](docs/architecture.md): component diagram, run lifec
 
 # Lint + typecheck (same commands as the CI lint job)
 .venv\Scripts\ruff check . ; .venv\Scripts\ruff format --check . ; .venv\Scripts\mypy
-cd apps\web ; npx eslint src e2e playwright.config.ts ; npx tsc --noEmit
+cd apps\web ; npx eslint src e2e playwright.config.ts ; npm run typecheck   # next typegen + tsc
 ```
 
 Run `docker-up.ps1` first for the Docker modes. The test scripts rebuild the worker image (cached) so the test worker runs the checked-out code, use their own databases and Redis DB indexes, and remove their worker containers afterwards — the dev database and dev queue (Redis DB 0) are never touched.

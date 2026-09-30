@@ -40,9 +40,11 @@ jobs:
       - name: eslint
         working-directory: apps/web
         run: npx eslint src e2e playwright.config.ts
-      - name: tsc --noEmit
+      # next typegen first: layout.tsx uses Next's generated route types
+      # (LayoutProps), which a fresh checkout doesn't have.
+      - name: tsc --noEmit (after next typegen)
         working-directory: apps/web
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
   python:
     name: Python suite (Postgres + Redis + worker container)
