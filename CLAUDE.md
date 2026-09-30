@@ -42,14 +42,17 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 ## Current status
 - **Phase 1 done** (HEAD `3bf2d55` before this file): Applications / Datasets / Runs pages,
   draft→published dataset versioning with DB-trigger immutability, CLI evaluation.
-- Tests: 33 Python + 1 Playwright pass — **on SQLite only**.
-- **Postgres/Docker path is unverified.** Docker is not installed on this machine
-  (`docker --version` fails, as of 2026-09-30). Pending once Docker is available: `docker-up.ps1`,
-  migrations, full Python + Playwright suites on Postgres, and confirming the PL/pgSQL trigger
-  blocks a raw-SQL UPDATE on a published version's test cases.
+- **Postgres/Docker path verified** (2026-09-30, Docker Desktop 29.8.1, postgres:16-alpine).
+  SQLite: 33 Python pass + 4 skipped, 1 Playwright pass. Postgres (`test.ps1 -Postgres`,
+  `test-ui.ps1 -Postgres`): 37 Python + 1 Playwright pass. The PL/pgSQL trigger blocks raw-SQL
+  UPDATE/INSERT/DELETE/un-publish on published versions (`tests/integration/test_db_triggers.py`).
+- `-Postgres` test DBs are `agentforge_test` / `agentforge_e2e_test`, built by Alembic (not
+  `create_all`, which has no triggers). Never point tests at the dev `agentforge` DB.
+- Windows PowerShell 5.1: native stderr + `$ErrorActionPreference="Stop"` aborts scripts when output
+  is redirected. Around docker/npm, relax to "Continue" and check `$LASTEXITCODE`.
 
 ## Phase plan
-1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done** (Postgres unverified)
+1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done** (SQLite + Postgres verified)
 2. Evaluation engine: more RAG evaluators, worker + queue (Docker), evidence at scale
 3. Agent trajectory evaluation, LangGraph example agent
 4. Regression engine, release policy, CI gate (`agentforge gate`)

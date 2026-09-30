@@ -124,13 +124,27 @@ repo).
 
 ## Local dev database: SQLite vs. Postgres
 
-Docker wasn't available in the environment this phase was built in, so the
-SQLAlchemy layer is driven entirely by `AGENTFORGE_DATABASE_URL`: Postgres
-via Docker Compose is the intended/documented setup, and a local SQLite
-file (`apps/api/agentforge_dev.db`, via `aiosqlite`) is a same-code-path
-fallback for running without Docker. The ORM models and Alembic migration
-are identical either way. One real difference was found and is worth
-knowing about: SQLite doesn't preserve the UTC-offset suffix on a
+The SQLAlchemy layer is driven entirely by `AGENTFORGE_DATABASE_URL`:
+Postgres via Docker Compose is the intended setup, and a local SQLite file
+(`apps/api/agentforge_dev.db`, via `aiosqlite`) is a same-code-path
+fallback for running without Docker. Both are verified: the full Python and
+Playwright suites pass on each (`test.ps1` / `test-ui.ps1`, with
+`-Postgres` for the Docker path — see the README's Testing section).
+
+Differences found by actually running on Postgres (all in the migrations,
+none in the ORM or API code):
+
+- `op.add_column` with a new `sa.Enum` does not emit `CREATE TYPE`; the
+  draft/publish migration now creates `datasetversionstatus` explicitly.
+  SQLite has no named enum types, so this was invisible there.
+- `op.drop_table` leaves Postgres enum types behind; the initial
+  migration's downgrade now drops `runstatus`/`resultstatus`, so
+  downgrade base → upgrade head round-trips.
+- Downgrading the draft/publish migration while a draft exists can't work
+  on either engine (the old schema requires `published_at`); it now
+  refuses with a clear message instead of an opaque `NOT NULL` violation.
+
+One more difference is worth knowing about: SQLite doesn't preserve the UTC-offset suffix on a
 `DateTime(timezone=True)` column across a write+re-read the way Postgres
 does, so a timestamp can come back as `...12:34:56` instead of
 `...12:34:56+00:00` (still the same instant) after a round trip through
@@ -191,6 +205,15 @@ and a raw `UPDATE`/`INSERT`/`DELETE`/un-publish attempt against a published
 version's rows is rejected by the trigger even when issued directly against
 the database, bypassing the API entirely.
 
+On Postgres this is an automated test, not a throwaway script:
+`tests/integration/test_db_triggers.py` runs under `test.ps1 -Postgres`
+against an Alembic-migrated test DB and asserts each raw statement fails
+with the trigger's message (SQLSTATE `23000`), while the same `UPDATE` on a
+draft succeeds. It was also confirmed by hand with `psql` against the
+Docker dev DB after `seed-demo.ps1`. The default SQLite test mode builds
+its schema with `create_all`, which has no triggers, so these tests are
+skipped there.
+
 ### A SQLAlchemy staleness bug the integration tests caught
 
 The first cut of `PATCH .../versions/{version}` read `dataset_version.test_cases`
@@ -216,7 +239,8 @@ browser.
 `apps/web/e2e/dataset-flow.spec.ts` (Playwright + Chromium) drives the
 actual UI in a real browser — distinct from `tests/e2e/` at the repo root,
 which is CLI-subprocess-only and never touches a browser. Playwright starts
-its own API (fresh temp SQLite, `apps/api/scripts/serve_fresh.py`) and web
+its own API (fresh temp SQLite, or with `test-ui.ps1 -Postgres` a freshly
+recreated, Alembic-migrated Postgres DB; `apps/api/scripts/serve_fresh.py`) and web
 server on dedicated ports (8010/3010) so it never collides with a manually
 running dev setup.
 

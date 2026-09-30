@@ -15,7 +15,13 @@ if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
 }
 
+# docker writes normal progress to stderr. Under "Stop", Windows PowerShell 5.1
+# turns that into a terminating error whenever output is redirected -- and a real
+# failure (non-zero exit) isn't caught at all. So relax it and check the exit code.
+$ErrorActionPreference = "Continue"
 docker compose up -d --build
+if ($LASTEXITCODE -ne 0) { throw "docker compose up failed (exit $LASTEXITCODE)" }
+$ErrorActionPreference = "Stop"
 Write-Host ""
 Write-Host "API:      http://127.0.0.1:8000/health"
 Write-Host "Postgres: 127.0.0.1:5432 (localhost only)"

@@ -33,7 +33,10 @@ export default defineConfig({
       command: `${VENV_PYTHON} apps/api/scripts/serve_fresh.py`,
       cwd: REPO_ROOT,
       env: {
-        AGENTFORGE_DATABASE_URL: `sqlite+aiosqlite:///${TEMP_DB.replace(/\\/g, "/")}`,
+        // AGENTFORGE_E2E_DATABASE_URL is set by `test-ui.ps1 -Postgres` to a
+        // freshly created Postgres DB; otherwise a fresh temp SQLite file.
+        AGENTFORGE_DATABASE_URL:
+          process.env.AGENTFORGE_E2E_DATABASE_URL ?? `sqlite+aiosqlite:///${TEMP_DB.replace(/\\/g, "/")}`,
         // Settings.cors_origins defaults to just :3000; this suite's web
         // server runs on WEB_PORT instead, so the browser's fetch from
         // that origin needs to be explicitly allowed or the API rejects

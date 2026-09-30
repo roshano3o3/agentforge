@@ -12,13 +12,13 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - An example RAG app (`examples/rag_app`) over synthetic "Northwind Outfitters" policy documents, using a deterministic keyword-overlap retriever — no external API calls.
 - A Next.js dashboard with three working pages — **Applications**, **Datasets**, **Runs** (each list + detail) — reading and writing only real persisted data over HTTP. Regression / Trace Explorer / Safety are stubbed nav links, not fake pages.
 - Dataset versions are a real **draft → published** state machine: a draft is created, edited (add/edit/delete test cases) through the UI or API, then explicitly published — a one-way transition enforced in the service layer *and* by a DB trigger (real Postgres trigger + real SQLite trigger, not just a comment), independent of the API code. Publishing an already-published version, or PATCHing one, returns `409` from the database itself if the API check were ever bypassed. "Editing" a published version means creating a new draft copied from it (`POST .../new-draft`) — never in-place.
-- 34 automated tests: 33 Python (unit + API integration + CLI-subprocess end-to-end) and 1 real browser test (Playwright/Chromium) that drives the actual UI — see [Testing](#testing).
+- 38 automated tests: 37 Python (unit + API integration + CLI-subprocess end-to-end + 4 raw-SQL trigger tests that need the Postgres test DB) and 1 real browser test (Playwright/Chromium) that drives the actual UI, runnable against either SQLite or Postgres — see [Testing](#testing).
 
 Everything in the CLI table output and the dashboard comes from a real, persisted `EvaluationRun`/`EvaluationResult` row. Nothing is hardcoded.
 
 ## Quick start (Windows)
 
-Two setup paths. **Path A (no Docker, SQLite)** is the one actually run and verified end-to-end while building this phase. **Path B (Docker + Postgres)** is the intended production-shaped setup; the Compose file and Dockerfile are provided and were reviewed, but Docker Desktop was not available in the environment this phase was built in, so it has not been run here — try it and file an issue if something's off.
+Two setup paths, both run and verified end-to-end (Windows 11, Docker Desktop 29.8.1, `postgres:16-alpine`). **Path A (no Docker, SQLite)** is the quick local loop. **Path B (Docker + Postgres)** is the intended production-shaped setup.
 
 ### Path A — no Docker, SQLite (verified)
 
@@ -52,7 +52,7 @@ In a third terminal, publish the dataset and run the evaluation:
 
 Then open <http://127.0.0.1:3000/runs>.
 
-### Path B — Docker + Postgres (not run in this environment)
+### Path B — Docker + Postgres (verified)
 
 Prerequisites: Docker Desktop (with WSL2), Node.js 18+.
 
@@ -63,6 +63,8 @@ Prerequisites: Docker Desktop (with WSL2), Node.js 18+.
 ```
 
 `.\scripts\docker-down.ps1` stops it (`-Volumes` also wipes the Postgres data volume).
+
+The first real run of this path found three migration bugs that SQLite could never surface: the draft/publish migration didn't create its Postgres enum type (`type "datasetversionstatus" does not exist` — the API container crash-looped), the initial migration's downgrade left its enum types behind (so a downgrade→upgrade round trip failed), and downgrading with a draft version present failed with an opaque `NOT NULL` violation (it now refuses up front with a clear message). All fixed; the full upgrade → downgrade base → upgrade round trip was re-run on both engines.
 
 ## Example evaluation (real output)
 
@@ -126,7 +128,13 @@ See [`docs/architecture.md`](docs/architecture.md) for the component diagram, th
 ```powershell
 .\scripts\test.ps1      # Python: unit + integration + CLI end-to-end (no browser)
 .\scripts\test-ui.ps1   # Playwright: real Chromium, drives the actual UI
+
+# Same suites against the Docker Compose Postgres (run docker-up.ps1 first):
+.\scripts\test.ps1 -Postgres      # uses DB agentforge_test (tables emptied per test)
+.\scripts\test-ui.ps1 -Postgres   # uses DB agentforge_e2e_test (dropped + recreated per run)
 ```
+
+With `-Postgres`, the schema is built by the real Alembic migrations (not `create_all`), so the PL/pgSQL immutability triggers exist, and `tests/integration/test_db_triggers.py` issues raw SQL `UPDATE`/`INSERT`/`DELETE`/un-publish statements against a published version, bypassing the API and ORM, and asserts the trigger rejects each one (plus a control: the same `UPDATE` on a draft succeeds). Those 4 tests are skipped in the default SQLite mode, whose `create_all` schema has no triggers. The dev `agentforge` database is never touched by either suite.
 
 `test.ps1` runs `tests/unit` (the scoring formula — perfect/partial/zero-overlap/zero-retrieval, order-independence, no double-counting duplicates), `tests/integration` (dataset draft/publish state machine — creation, editing, publish, re-publish rejection, PATCH-on-published rejection with `409`, new-draft-from-version copying, `latest` resolving only published versions — plus application/dataset listing and evaluation-run persistence/aggregation, all against a real FastAPI app + real async SQLAlchemy session over in-memory SQLite), and `tests/e2e` (the actual `agentforge` CLI, as a subprocess, against a really-running uvicorn server). **None of this touches a browser or the frontend.**
 
@@ -134,7 +142,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the component diagram, th
 
 **Note:** Next.js's dev server holds a lock per project directory, not per port — `test-ui.ps1` will fail to start if `dev-web.ps1` (or any other `next dev` in this repo) is already running. Stop it first.
 
-Last run in this environment: **33 Python tests passed** (Python 3.12.7, Windows, both Git Bash and native PowerShell) and **1/1 Playwright test passed** (Chromium).
+Last run in this environment (Python 3.12.7, Windows 11, Postgres 16 in Docker Desktop):
+
+| Suite | SQLite (default) | Postgres (`-Postgres`) |
+|---|---|---|
+| `test.ps1` | 33 passed, 4 skipped (trigger tests) | 37 passed |
+| `test-ui.ps1` | 1/1 passed | 1/1 passed |
+
+The trigger tests were also checked to fail when they should: with both triggers manually dropped from `agentforge_test`, the 3 blocking tests failed (`DID NOT RAISE`) and the draft control still passed.
 
 No coverage percentage is claimed here because none has been measured.
 
@@ -168,7 +183,7 @@ Read this before assuming a feature exists.
 - **No authentication.** The API has no auth of any kind. Everything is bound to `127.0.0.1` (localhost) — Postgres, the API, and the dashboard's default API URL — precisely because there is no access control. **This setup is not ready for any kind of public or shared deployment.**
 - **Trusted, unsandboxed adapter execution.** The CLI imports and calls the adapter function directly, in-process. This is fine for example/local code you wrote yourself; it is not a sandbox and provides no isolation from arbitrary code.
 - **The example RAG app is entirely synthetic.** "Northwind Outfitters" is a fictional retailer invented for this repo; its policy documents are made up. The keyword-overlap retriever is deliberately simple (no embeddings, no ML) so the whole system runs offline with zero API keys.
-- **Docker/Postgres path is unverified in this environment.** Docker Desktop is not installed on the machine this phase was built on (`docker --version` fails in both Git Bash and PowerShell) — the Compose file and Dockerfile exist and were reviewed but never actually run. The SQLite path (Path A above) is what was actually executed and tested.
+- **The Docker/Postgres path is verified on one machine only** (Windows 11 + Docker Desktop, see [Testing](#testing)). There's no CI yet, so nothing re-checks it automatically. Only the API and Postgres are containerized; the dashboard and CLI still run natively.
 - **A known SQLite-only serialization quirk:** timestamps re-fetched from the SQLite dev DB can lose their explicit UTC-offset suffix (still the same instant) in a way Postgres's `DateTime(timezone=True)` column does not exhibit. Documented in `docs/architecture.md` and handled explicitly in the relevant test.
 - **Editing is real, but only while a version is a draft.** Once published, a `DatasetVersion` is genuinely immutable — no route, in the UI or the API, can change its test cases, and the DB trigger blocks it even at the SQL level. The only way to change a published version's content is `POST .../new-draft` (copy into a fresh draft, edit that, publish it as the next version).
 - **A draft PATCH replaces the entire test-case set, not a partial merge.** Sending `{"test_cases": [...]}"` means "this is now the complete set" — case keys missing from the list are deleted. The UI always sends the full current list, so this is invisible in normal use, but it matters if you call the API directly.

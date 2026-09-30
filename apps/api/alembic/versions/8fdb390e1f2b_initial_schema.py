@@ -118,3 +118,7 @@ def downgrade() -> None:
     op.drop_table('datasets')
     op.drop_table('applications')
     # ### end Alembic commands ###
+    # drop_table() leaves Postgres enum types behind, so a later upgrade would fail
+    # with 'type "runstatus" already exists'. No-op on SQLite (no named enum types).
+    sa.Enum(name='resultstatus').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='runstatus').drop(op.get_bind(), checkfirst=True)

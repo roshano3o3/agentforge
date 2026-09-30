@@ -2,9 +2,8 @@
 real (locally spawned) uvicorn server -- no mocking of the CLI, the API, or
 the HTTP layer between them.
 
-Uses a temp-file SQLite database rather than Postgres because Docker isn't
-available in this environment; the API/ORM code path exercised is identical
-to the one that runs against Postgres in Docker Compose.
+Uses a temp-file SQLite database by default, or the Alembic-migrated Postgres
+test DB when AGENTFORGE_TEST_DATABASE_URL is set (see tests/conftest.py).
 """
 
 from __future__ import annotations
@@ -32,34 +31,15 @@ def _free_port() -> int:
 
 
 @pytest.fixture()
-def live_api(tmp_path: Path) -> Iterator[str]:
-    db_path = tmp_path / "e2e.db"
+def live_api(tmp_path: Path, test_db_url: str | None) -> Iterator[str]:
     port = _free_port()
     env = dict(os.environ)
-    env["AGENTFORGE_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
-
-    create_schema = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import asyncio\n"
-            # Importing agentforge_api.models registers all tables on
-            # Base.metadata -- without this, create_all() silently creates
-            # an empty database (no error, zero tables).
-            "import agentforge_api.models\n"
-            "from agentforge_api.db.base import Base, engine\n"
-            "async def main():\n"
-            "    async with engine.begin() as conn:\n"
-            "        await conn.run_sync(Base.metadata.create_all)\n"
-            "asyncio.run(main())\n",
-        ],
-        cwd=API_DIR,
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    assert create_schema.returncode == 0, create_schema.stdout + create_schema.stderr
+    if test_db_url is not None:
+        # Schema already built by the Alembic migrations; tables emptied by test_db_url.
+        env["AGENTFORGE_DATABASE_URL"] = test_db_url
+    else:
+        env["AGENTFORGE_DATABASE_URL"] = f"sqlite+aiosqlite:///{tmp_path / 'e2e.db'}"
+        _create_sqlite_schema(env)
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "agentforge_api.main:app", "--host", "127.0.0.1", "--port", str(port)],
@@ -91,6 +71,31 @@ def live_api(tmp_path: Path) -> Iterator[str]:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def _create_sqlite_schema(env: dict[str, str]) -> None:
+    create_schema = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio\n"
+            # Importing agentforge_api.models registers all tables on
+            # Base.metadata -- without this, create_all() silently creates
+            # an empty database (no error, zero tables).
+            "import agentforge_api.models\n"
+            "from agentforge_api.db.base import Base, engine\n"
+            "async def main():\n"
+            "    async with engine.begin() as conn:\n"
+            "        await conn.run_sync(Base.metadata.create_all)\n"
+            "asyncio.run(main())\n",
+        ],
+        cwd=API_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert create_schema.returncode == 0, create_schema.stdout + create_schema.stderr
 
 
 def _run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:

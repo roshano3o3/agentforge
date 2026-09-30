@@ -131,12 +131,21 @@ _SQLITE_DOWN_STATEMENTS = [
 ]
 
 
+_STATUS_ENUM = sa.Enum("draft", "published", name="datasetversionstatus")
+
+
 def upgrade() -> None:
+    # op.add_column() does not emit CREATE TYPE for a new Enum (only
+    # create_table does), so on Postgres the type must be created explicitly
+    # or the ALTER TABLE fails with 'type "datasetversionstatus" does not
+    # exist'. No-op on SQLite, which has no named enum types -- which is why
+    # this went unnoticed until the migration was first run on Postgres.
+    _STATUS_ENUM.create(op.get_bind(), checkfirst=True)
     op.add_column(
         "dataset_versions",
         sa.Column(
             "status",
-            sa.Enum("draft", "published", name="datasetversionstatus"),
+            _STATUS_ENUM,
             nullable=False,
             server_default="published",
         ),
@@ -162,6 +171,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The pre-draft schema requires published_at on every row, so a draft can't
+    # be represented there. Refuse clearly rather than silently deleting drafts
+    # (or failing later with an opaque NOT NULL violation).
+    drafts = op.get_bind().execute(
+        sa.text("SELECT COUNT(*) FROM dataset_versions WHERE status = 'draft'")
+    ).scalar_one()
+    if drafts:
+        raise RuntimeError(
+            f"cannot downgrade: {drafts} draft dataset_version(s) exist, and the previous "
+            "schema has no way to represent a draft. Publish or delete them first."
+        )
+
     dialect = op.get_bind().dialect.name
     if dialect == "postgresql":
         for stmt in _PG_DOWN_STATEMENTS:
@@ -176,3 +197,4 @@ def downgrade() -> None:
 
     op.drop_column("dataset_versions", "created_at")
     op.drop_column("dataset_versions", "status")
+    _STATUS_ENUM.drop(op.get_bind(), checkfirst=True)

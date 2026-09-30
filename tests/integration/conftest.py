@@ -1,12 +1,11 @@
-"""Integration test fixtures: a real FastAPI app wired to a real (in-memory
-SQLite) async SQLAlchemy session, exercised over real HTTP semantics via
-httpx's ASGI transport (no live socket, but the full FastAPI request/response
-and SQLAlchemy stack runs for real -- this is not mocked).
+"""Integration test fixtures: a real FastAPI app wired to a real async
+SQLAlchemy session, exercised over real HTTP semantics via httpx's ASGI
+transport (no live socket, but the full FastAPI request/response and
+SQLAlchemy stack runs for real -- this is not mocked).
 
-SQLite stands in for Postgres here because Docker isn't available in this
-environment (see README "Development without Docker"). The schema and ORM
-code are identical either way; Alembic's migration path against real
-Postgres is documented separately and was verified manually.
+The database is in-memory SQLite by default, or the Alembic-migrated
+Postgres test DB when AGENTFORGE_TEST_DATABASE_URL is set (see
+tests/conftest.py and `.\\scripts\\test.ps1 -Postgres`).
 """
 
 from __future__ import annotations
@@ -17,21 +16,25 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from agentforge_api.db.base import Base, get_session
 from agentforge_api.main import app
 
 
 @pytest_asyncio.fixture
-async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(
-        "sqlite+aiosqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def session_factory(test_db_url: str | None) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    if test_db_url is not None:
+        # Schema already built by the Alembic migrations; tables emptied by test_db_url.
+        engine = create_async_engine(test_db_url, poolclass=NullPool)
+    else:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         yield factory
