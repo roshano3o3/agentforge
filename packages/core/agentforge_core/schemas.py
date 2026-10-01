@@ -102,6 +102,9 @@ class DatasetOut(BaseModel):
 # Validated against the evaluator registry by the API (and the CLI, offline);
 # see packages/evaluators/agentforge_evaluators/config.py for semantics.
 EvaluatorConfigIn = dict[str, Any]
+# A test case's trajectory expectations; see
+# packages/evaluators/agentforge_evaluators/trajectory.py for the keys.
+TrajectoryIn = dict[str, Any]
 
 
 class TestCaseIn(BaseModel):
@@ -116,6 +119,10 @@ class TestCaseIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
     # None = use the dataset version's default_evaluators as-is.
     evaluators: EvaluatorConfigIn | None = None
+    # Trajectory expectations for agent cases (expected_tools, forbidden_tools,
+    # expected_sequence, ...). Validated by the API and the CLI against
+    # agentforge_evaluators.validate_trajectory.
+    trajectory: TrajectoryIn | None = None
 
     @field_validator("expected_context", "tags")
     @classmethod
@@ -160,6 +167,7 @@ class TestCaseOut(BaseModel):
     expected_context: list[str]
     tags: list[str]
     evaluators: EvaluatorConfigIn | None
+    trajectory: TrajectoryIn | None
     # Read-only legacy fields from Phase 2 datasets (published before per-case
     # config existed). The worker still honors them for those versions; new
     # data can't set them -- use `evaluators` instead.
@@ -234,6 +242,24 @@ class MetricScoreOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentStepOut(BaseModel):
+    """One step of the trajectory the agent reported, exactly as stored.
+    `step_index` is 1-based over all steps -- the "step N" in evaluator
+    reasons and in their evidence's `failing_steps`."""
+
+    step_index: int
+    kind: Literal["retrieval", "tool_call", "final_answer"]
+    name: str
+    args: dict
+    result: Any
+    error: str | None
+    retrieved_doc_ids: list[str]
+    output: str | None
+    duration_ms: float | None
+
+    model_config = {"from_attributes": True}
+
+
 class EvaluationResultOut(BaseModel):
     id: str
     test_case_id: str
@@ -253,6 +279,10 @@ class EvaluationResultOut(BaseModel):
     error_type: str | None
     error_message: str | None
     metrics: list[MetricScoreOut]
+    # The case's trajectory expectations (from the frozen dataset version) and
+    # the steps the agent reported, in order. Empty for non-agent cases.
+    trajectory: TrajectoryIn | None = None
+    steps: list[AgentStepOut] = Field(default_factory=list)
 
 
 class RunProgress(BaseModel):

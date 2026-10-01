@@ -13,6 +13,7 @@ COPY packages/sdk /app/packages/sdk
 COPY apps/api /app/apps/api
 COPY apps/worker /app/apps/worker
 COPY examples/rag_app /app/examples/rag_app
+COPY examples/invoice_agent /app/examples/invoice_agent
 COPY config /app/config
 
 RUN pip install --no-cache-dir \
@@ -21,7 +22,8 @@ RUN pip install --no-cache-dir \
     -e /app/packages/sdk \
     -e /app/apps/api \
     -e /app/apps/worker \
-    -e /app/examples/rag_app
+    -e /app/examples/rag_app \
+    -e /app/examples/invoice_agent
 
 ENV AGENTFORGE_PRICING_FILE=/app/config/pricing.yaml
 WORKDIR /app/apps/worker

@@ -25,6 +25,7 @@ known-first-party = [
     "agentforge_evaluators",
     "agentforge_sdk",
     "agentforge_worker",
+    "invoice_agent",
     "rag_app",
 ]
 
@@ -38,6 +39,7 @@ files = [
     "apps/worker/agentforge_worker",
     "cli/agentforge_cli",
     "examples/rag_app/rag_app",
+    "examples/invoice_agent/invoice_agent",
 ]
 check_untyped_defs = true
 warn_unused_ignores = true

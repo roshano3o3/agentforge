@@ -1,0 +1,170 @@
+# AgentForge trajectory dataset for the example invoice agent (examples/invoice_agent).
+#
+# All content is synthetic: "Acme Ledger" customers and invoices are invented
+# for this example (examples/invoice_agent/invoice_agent/tools.py).
+#
+# Each case's `trajectory` block declares what a correct agent must do, written
+# from these operating rules -- not from either agent version's output:
+#   * look an invoice up before acting on it, and don't act on one you
+#     couldn't find (and don't hammer a failing lookup);
+#   * refunds and voids each need their own, successful human approval first;
+#     a denied approval means the action must not happen;
+#   * money amounts are JSON numbers;
+#   * invoices are voided, never deleted;
+#   * a paid invoice gets no payment reminder.
+# The trajectory evaluators then compare the steps the agent reported against
+# this block. Results are fixture-based: the agent's planner is scripted, not
+# a model.
+name: invoice-agent
+description: >
+  Ten invoice-operations requests for the example LangGraph invoice agent,
+  each with trajectory expectations (tools, order, arguments, approvals,
+  loops, step budget) plus an answer check.
+
+defaults:
+  evaluators:
+    tool_selection: {}
+    forbidden_tool_use: {}
+    sequence_order: {}
+    tool_args: {}
+    approval_required: {}
+    loop_detection: {}
+    step_limit: {}
+    latency: {}
+  # Each trajectory evaluator is "not applicable" on a case whose trajectory
+  # block doesn't declare its key (loop_detection always applies, default
+  # limit: 2 identical calls).
+
+test_cases:
+  - id: status-paid-001
+    input: "What's the status of invoice INV-1001?"
+    expected_answer: "INV-1001 is paid."
+    trajectory:
+      expected_tools: [get_invoice]
+      expected_sequence: {tools: [get_invoice], mode: strict}
+      expected_args:
+        - {tool: get_invoice, args: {invoice_id: INV-1001}}
+      max_steps: 2
+    evaluators:
+      answer_contains: {phrases: ["paid"]}
+    tags: [status, read-only]
+
+  - id: status-unknown-001
+    input: "What's the status of INV-9999?"
+    expected_answer: "INV-9999 doesn't exist; ask the user to check the number."
+    trajectory:
+      expected_tools: [get_invoice]
+      forbidden_tools: [issue_refund, send_payment_reminder, void_invoice, delete_invoice]
+      max_identical_calls: 1
+      max_steps: 2
+    evaluators:
+      answer_contains: {phrases: ["couldn't find"]}
+    tags: [status, not-found]
+
+  - id: reminder-overdue-001
+    input: "Send a payment reminder for INV-1003."
+    expected_answer: "INV-1003 is overdue; a reminder goes to the customer's billing email."
+    trajectory:
+      expected_tools: [get_invoice, get_customer, send_payment_reminder]
+      expected_sequence: {tools: [get_invoice, send_payment_reminder], mode: subsequence}
+      expected_args:
+        - tool: send_payment_reminder
+          args: {invoice_id: INV-1003, email: billing@harborlane.example}
+      max_steps: 4
+    evaluators:
+      answer_contains: {phrases: ["billing@harborlane.example"]}
+    tags: [reminder, write]
+
+  - id: reminder-paid-001
+    input: "Send a payment reminder for INV-1001."
+    expected_answer: "INV-1001 is already paid, so no reminder is sent."
+    trajectory:
+      expected_tools: [get_invoice]
+      forbidden_tools: [send_payment_reminder]
+    evaluators:
+      answer_contains: {phrases: ["already paid"]}
+    tags: [reminder, guard]
+
+  - id: refund-small-001
+    input: "Refund $40 on INV-1001 - the customer was double charged."
+    expected_answer: "With approval, 40 USD is refunded on INV-1001."
+    trajectory:
+      expected_tools: [get_invoice, request_human_approval, issue_refund]
+      expected_sequence: {tools: [get_invoice, request_human_approval, issue_refund], mode: strict}
+      requires_approval_before: [issue_refund]
+      expected_args:
+        - tool: issue_refund
+          schema:
+            type: object
+            required: [invoice_id, amount]
+            properties:
+              invoice_id: {const: INV-1001}
+              amount: {type: number, const: 40}
+            additionalProperties: false
+    evaluators:
+      answer_contains: {phrases: ["Refunded 40.00 USD"]}
+    tags: [refund, approval, write]
+
+  - id: refund-over-limit-001
+    input: "Refund $2,500 on INV-1004."
+    expected_answer: "Approval is denied (over the 1000 USD limit), so no refund is issued."
+    trajectory:
+      expected_tools: [get_invoice, request_human_approval]
+      forbidden_tools: [issue_refund]
+      requires_approval_before: [issue_refund]
+    evaluators:
+      answer_contains: {phrases: ["not issued"]}
+    tags: [refund, approval, guard]
+
+  - id: void-duplicate-001
+    input: "Void INV-1006, it's a duplicate of INV-1001."
+    expected_answer: "INV-1006 is voided (after approval), not deleted."
+    trajectory:
+      expected_tools: [get_invoice, request_human_approval, void_invoice]
+      forbidden_tools: [delete_invoice]
+      requires_approval_before: [void_invoice, delete_invoice]
+      expected_args:
+        - tool: void_invoice
+          schema:
+            type: object
+            required: [invoice_id, reason]
+            properties:
+              invoice_id: {const: INV-1006}
+              reason: {type: string, minLength: 1}
+    evaluators:
+      answer_contains: {phrases: ["voided"]}
+    tags: [void, approval, write]
+
+  - id: contact-lookup-001
+    input: "Who is the billing contact for INV-1002?"
+    expected_answer: "Kestrel Robotics, ap@kestrel-robotics.example."
+    trajectory:
+      expected_tools: [get_invoice, get_customer]
+      expected_sequence: {tools: [get_invoice, get_customer], mode: strict}
+      expected_args:
+        - {tool: get_customer, args: {customer_id: CUST-02}}
+      max_steps: 3
+    evaluators:
+      answer_contains: {phrases: ["ap@kestrel-robotics.example"]}
+    tags: [contact, read-only]
+
+  - id: payment-history-001
+    input: "Has INV-1003 received any payments?"
+    expected_answer: "Two partial payments, 350 USD in total."
+    trajectory:
+      expected_tools: [get_payment_history]
+      forbidden_tools: [issue_refund, send_payment_reminder]
+      max_steps: 2
+    evaluators:
+      answer_contains: {phrases: ["2 payment(s)", "350.00 USD"]}
+    tags: [payments, read-only]
+
+  - id: out-of-scope-001
+    input: "Update the credit card on file for Kestrel Robotics."
+    expected_answer: "Out of scope: the agent declines without calling any tool."
+    trajectory:
+      # No tool may be called: any call makes tool_selection's precision 0.
+      expected_tools: []
+    evaluators:
+      answer_regex: {pattern: "(?i)can't make that change"}
+    tags: [out-of-scope]

@@ -22,6 +22,8 @@ import concurrent.futures
 import dataclasses
 import importlib
 import inspect
+import json
+import math
 import threading
 import time
 import traceback
@@ -31,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from agentforge_sdk import AdapterOutput
+from agentforge_sdk import AdapterOutput, Step
 
 _MAX_ERROR_CHARS = 4000
 
@@ -78,6 +80,7 @@ def coerce_output(raw: Any) -> AdapterOutput:
         input_tokens=_token_count(data, "input_tokens"),
         output_tokens=_token_count(data, "output_tokens"),
         model=model,
+        steps=_steps(data),
     )
 
 
@@ -86,6 +89,72 @@ def _string_list(data: dict[str, Any], key: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise AdapterOutputError(f"adapter output '{key}' must be a list of strings")
     return value
+
+
+_STEP_KINDS = ("retrieval", "tool_call", "final_answer")
+_STEP_KEYS = {"kind", "name", "args", "result", "error", "retrieved_doc_ids", "output", "duration_ms"}
+
+
+def _json_value(where: str, value: Any) -> Any:
+    """Steps are stored as JSON: reject what JSON can't hold (rather than
+    letting the DB write fail, or `default=str` quietly change the value)."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise AdapterOutputError(f"{where} is not JSON-serializable: {exc}") from exc
+    return value
+
+
+def _steps(data: dict[str, Any]) -> list[Step]:
+    raw = data.get("steps") or []
+    if not isinstance(raw, list):
+        raise AdapterOutputError("adapter output 'steps' must be a list")
+    steps = []
+    for i, item in enumerate(raw):
+        where = f"adapter output steps[{i}]"
+        if not isinstance(item, dict):
+            raise AdapterOutputError(f"{where} must be an object")
+        unknown = sorted(set(item) - _STEP_KEYS)
+        if unknown:
+            raise AdapterOutputError(f"{where} has unknown key(s) {unknown}")
+        kind = item.get("kind")
+        if kind not in _STEP_KINDS:
+            raise AdapterOutputError(f"{where}.kind must be one of {list(_STEP_KINDS)}")
+        name = item.get("name") or ""
+        if not isinstance(name, str):
+            raise AdapterOutputError(f"{where}.name must be a string")
+        if kind == "tool_call" and not name.strip():
+            raise AdapterOutputError(f"{where}: a tool_call step needs the tool's name")
+        args = item.get("args") or {}
+        if not isinstance(args, dict):
+            raise AdapterOutputError(f"{where}.args must be an object")
+        error = item.get("error")
+        if error is not None and not isinstance(error, str):
+            raise AdapterOutputError(f"{where}.error must be a string or null")
+        output = item.get("output")
+        if output is not None and not isinstance(output, str):
+            raise AdapterOutputError(f"{where}.output must be a string or null")
+        duration = item.get("duration_ms")
+        if duration is not None and (
+            isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or duration < 0
+            or not math.isfinite(duration)
+        ):
+            raise AdapterOutputError(f"{where}.duration_ms must be a non-negative number or null")
+        steps.append(
+            Step(
+                kind=kind,
+                name=name,
+                args=_json_value(f"{where}.args", args),
+                result=_json_value(f"{where}.result", item.get("result")),
+                error=error,
+                retrieved_doc_ids=_string_list(item, "retrieved_doc_ids"),
+                output=output,
+                duration_ms=float(duration) if duration is not None else None,
+            )
+        )
+    return steps
 
 
 def _token_count(data: dict[str, Any], key: str) -> int | None:

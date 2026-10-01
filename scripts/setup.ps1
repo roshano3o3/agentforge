@@ -31,6 +31,7 @@ Write-Host "Installing local packages (editable, in dependency order) ..."
 & $venvPython -m pip install --quiet -e "$RepoRoot\apps\worker"
 & $venvPython -m pip install --quiet -e "$RepoRoot\cli"
 & $venvPython -m pip install --quiet -e "$RepoRoot\examples\rag_app"
+& $venvPython -m pip install --quiet -e "$RepoRoot\examples\invoice_agent"
 
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"

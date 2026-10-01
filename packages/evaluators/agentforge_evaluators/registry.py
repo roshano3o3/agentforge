@@ -198,7 +198,6 @@ register(
 )
 
 
-
 def _trajectory_params(*keys: str) -> ParamValidator:
     """Trajectory evaluators take their expectation from the case's
     `trajectory` block; these params let a config override that key."""

@@ -29,6 +29,7 @@ from agentforge_core import schemas
 from agentforge_core.schemas import (
     FIXTURE_BASED_LABEL,
     LOCAL_DETERMINISTIC,
+    AgentStepOut,
     EvaluationResultOut,
     EvaluationRunOut,
     EvaluationRunSummaryOut,
@@ -96,7 +97,9 @@ def case_records(results: list[EvaluationResult]) -> list[CaseRecord]:
 
 def _results_query():
     return selectinload(EvaluationRun.results).options(
-        selectinload(EvaluationResult.test_case), selectinload(EvaluationResult.metrics)
+        selectinload(EvaluationResult.test_case),
+        selectinload(EvaluationResult.metrics),
+        selectinload(EvaluationResult.steps),
     )
 
 
@@ -197,6 +200,8 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
                     MetricScoreOut.model_validate(m)
                     for m in sorted(r.metrics, key=lambda m: (m.evaluator_name, m.evaluator_version))
                 ],
+                trajectory=r.test_case.trajectory,
+                steps=[AgentStepOut.model_validate(s) for s in sorted(r.steps, key=lambda s: s.step_index)],
             )
             for r in results
         ],

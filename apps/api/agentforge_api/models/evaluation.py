@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -97,6 +98,9 @@ class EvaluationResult(Base):
     run: Mapped[EvaluationRun] = relationship(back_populates="results")
     test_case: Mapped[TestCase] = relationship()
     metrics: Mapped[list[MetricScore]] = relationship(back_populates="result", cascade="all, delete-orphan")
+    steps: Mapped[list[AgentStep]] = relationship(
+        back_populates="result_row", cascade="all, delete-orphan", order_by="AgentStep.step_index"
+    )
 
 
 class MetricScore(Base):
@@ -119,3 +123,38 @@ class MetricScore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     result: Mapped[EvaluationResult] = relationship(back_populates="metrics")
+
+
+class AgentStep(Base):
+    """One step of the trajectory an agent reported for one case, in order.
+    `step_index` is 1-based and counts every step (retrieval, tool calls, the
+    final answer) -- the "step N" that trajectory evaluator reasons and the
+    dashboard refer to. Only ever what the adapter reported: AgentForge
+    doesn't infer steps or timings. Frozen with the run (DB trigger in the
+    `agent_trajectory_steps` migration)."""
+
+    __tablename__ = "agent_steps"
+    __table_args__ = (
+        UniqueConstraint("evaluation_result_id", "step_index", name="uq_agent_step_index"),
+        CheckConstraint("kind IN ('retrieval', 'tool_call', 'final_answer')", name="ck_agent_step_kind"),
+        CheckConstraint("step_index >= 1", name="ck_agent_step_index_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    evaluation_result_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("evaluation_results.id"), nullable=False, index=True
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    args: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Any JSON value the tool returned; NULL when it returned nothing or errored.
+    result: Mapped[Any] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    retrieved_doc_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    output: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    # `result` is the tool's return value, so the parent row is `result_row`.
+    result_row: Mapped[EvaluationResult] = relationship(back_populates="steps")

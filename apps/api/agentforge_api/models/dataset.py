@@ -81,6 +81,10 @@ class TestCase(Base):
     # Per-case evaluator config, laid over the version's default_evaluators.
     # NULL = inherit the default unchanged.
     evaluators: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Trajectory expectations for agent cases (expected_tools, forbidden_tools,
+    # expected_sequence, ...; see agentforge_evaluators.trajectory). NULL for
+    # cases with none. Frozen with the published version like every column.
+    trajectory: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Legacy (Phase 2): answer assertions written before per-case config. Kept
     # read-only so published versions are never rewritten; the worker maps
     # them to answer_contains/answer_regex params, and new-draft converts

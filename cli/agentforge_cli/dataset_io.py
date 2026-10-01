@@ -12,6 +12,9 @@
         expected_answer: <optional reference answer>
         expected_context: [<doc id>, ...]
         tags: [...]
+        trajectory:               # optional: agent trajectory expectations
+          expected_tools: [get_invoice]
+          forbidden_tools: [delete_invoice]
         evaluators:               # optional per-case overrides/additions
           answer_contains: {phrases: ["45 days"]}
           heuristic_context_precision: false   # drop a default for this case
@@ -29,10 +32,10 @@ import yaml
 from pydantic import ValidationError
 
 from agentforge_core.schemas import DatasetVersionTestCasesRequest, TestCaseIn
-from agentforge_evaluators import EvaluatorConfigError, validate_config
+from agentforge_evaluators import EvaluatorConfigError, TrajectoryConfigError, validate_config, validate_trajectory
 
 _TOP_LEVEL_KEYS = {"name", "description", "defaults", "test_cases"}
-_CASE_KEYS = {"id", "input", "expected_answer", "expected_context", "tags", "evaluators"}
+_CASE_KEYS = {"id", "input", "expected_answer", "expected_context", "tags", "evaluators", "trajectory"}
 
 
 class DatasetFileError(Exception):
@@ -94,6 +97,10 @@ def validate_dataset_file(
         except EvaluatorConfigError as exc:
             raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') evaluators: {exc}") from exc
         try:
+            trajectory = validate_trajectory(case.get("trajectory"))
+        except TrajectoryConfigError as exc:
+            raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') trajectory: {exc}") from exc
+        try:
             test_cases.append(
                 TestCaseIn(
                     case_key=case["id"],
@@ -102,6 +109,7 @@ def validate_dataset_file(
                     expected_context=case.get("expected_context") or [],
                     tags=case.get("tags") or [],
                     evaluators=evaluators,
+                    trajectory=trajectory,
                 )
             )
         except ValidationError as exc:

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from agentforge_api.models.dataset import DatasetVersion, TestCase
 from agentforge_api.models.evaluation import (
     TERMINAL_STATUSES,
+    AgentStep,
     EvaluationResult,
     EvaluationRun,
     MetricScore,
@@ -36,6 +37,7 @@ from agentforge_evaluators import (
     EvaluatorSpec,
     MetricOutcome,
     ModelPrice,
+    TrajectoryStep,
     compute_aggregates,
     effective_config,
     resolve,
@@ -120,6 +122,11 @@ def _eval_input(tc: TestCase, outcome: CaseOutcome) -> EvalInput:
         input_tokens=out.input_tokens,
         output_tokens=out.output_tokens,
         model=out.model,
+        steps=tuple(
+            TrajectoryStep(index=i, kind=s.kind, name=s.name, args=dict(s.args), result=s.result, error=s.error)
+            for i, s in enumerate(out.steps, start=1)
+        ),
+        trajectory=tc.trajectory,
     )
 
 
@@ -145,6 +152,7 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], run_id: str)
         else:
             log.warning("run %s was already running (previous attempt died); restarting it from scratch", run_id)
             result_ids = select(EvaluationResult.id).where(EvaluationResult.evaluation_run_id == run_id)
+            await session.execute(delete(AgentStep).where(AgentStep.evaluation_result_id.in_(result_ids)))
             await session.execute(delete(MetricScore).where(MetricScore.evaluation_result_id.in_(result_ids)))
             await session.execute(delete(EvaluationResult).where(EvaluationResult.evaluation_run_id == run_id))
         await session.commit()
@@ -202,6 +210,21 @@ async def _record(
         )
         session.add(result)
         await session.flush()
+        for i, step in enumerate(out.steps if out else [], start=1):
+            session.add(
+                AgentStep(
+                    evaluation_result_id=result.id,
+                    step_index=i,
+                    kind=step.kind,
+                    name=step.name,
+                    args=dict(step.args),
+                    result=step.result,
+                    error=step.error,
+                    retrieved_doc_ids=list(step.retrieved_doc_ids),
+                    output=step.output,
+                    duration_ms=step.duration_ms,
+                )
+            )
         for spec, m in scored:
             session.add(
                 MetricScore(
