@@ -72,6 +72,25 @@ export interface MetricScore {
   labels: string[];
 }
 
+export type StepKind = "retrieval" | "tool_call" | "final_answer";
+
+// One step the agent reported, exactly as stored. step_index is 1-based over
+// all steps: the "step N" in evaluator reasons and evidence.failing_steps.
+export interface AgentStep {
+  step_index: number;
+  kind: StepKind;
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  error: string | null;
+  retrieved_doc_ids: string[];
+  output: string | null;
+  duration_ms: number | null;
+}
+
+// A test case's trajectory expectations (see docs/evaluators.md).
+export type TrajectoryExpectations = Record<string, unknown>;
+
 export interface EvaluationResult {
   id: string;
   test_case_id: string;
@@ -91,6 +110,8 @@ export interface EvaluationResult {
   error_type: string | null;
   error_message: string | null;
   metrics: MetricScore[];
+  trajectory: TrajectoryExpectations | null;
+  steps: AgentStep[];
 }
 
 export interface EvaluationRun extends EvaluationRunSummary {
@@ -111,7 +132,7 @@ export interface Evaluator {
   name: string;
   version: string;
   key: string;
-  kind: "quality" | "measurement";
+  kind: "quality" | "measurement" | "trajectory";
   description: string;
 }
 
@@ -160,6 +181,7 @@ export interface TestCase {
   expected_context: string[];
   tags: string[];
   evaluators: EvaluatorConfig | null;
+  trajectory: TrajectoryExpectations | null;
   // Read-only legacy fields on versions published before per-case config.
   expected_answer_contains: string[];
   expected_answer_regex: string | null;

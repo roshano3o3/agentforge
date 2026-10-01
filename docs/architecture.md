@@ -1,4 +1,4 @@
-# Architecture — Phase 2 (evaluation engine)
+# Architecture — Phase 3 (evaluation engine + agent trajectories)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -20,7 +20,7 @@ flowchart LR
         API --> PG
         API -->|enqueue run id| REDIS
         REDIS -->|job| WORKER
-        WORKER -->|results, metric scores,\naggregates, status| PG
+        WORKER -->|results, agent steps,\nmetric scores, aggregates, status| PG
     end
 
     CLI -->|HTTP: create run, poll| API
@@ -105,6 +105,7 @@ erDiagram
     EvaluationRun ||--o{ EvaluationResult : "one per test case"
     TestCase ||--o{ EvaluationResult : "scored per"
     EvaluationResult ||--o{ MetricScore : "one per evaluator"
+    EvaluationResult ||--o{ AgentStep : "trajectory, in order"
 ```
 
 - `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
@@ -118,6 +119,32 @@ erDiagram
   `value` + `unit`, `passed` (null = not applicable / no budget), `reason`,
   `evidence`, `labels` (`fixture-based` for local-deterministic runs,
   `estimated` for cost).
+- `AgentStep` (Phase 3): one step the agent reported, `step_index` 1-based
+  over all steps (unique per result), `kind` (`retrieval` / `tool_call` /
+  `final_answer`, CHECK-constrained), tool `name`, `args`, `result` or
+  `error`, `retrieved_doc_ids`, `output`, optional `duration_ms`.
+- `TestCase.trajectory` (Phase 3): the case's trajectory expectations
+  (`expected_tools`, `forbidden_tools`, ...; see docs/evaluators.md),
+  frozen with the published version like every other column.
+
+### Agent trajectories: how a step gets from the agent to the dashboard
+
+1. The adapter returns `steps` with its output (python: `AdapterOutput.steps`;
+   http: a `steps` array in the JSON). The worker validates them in
+   `coerce_output` (kinds, names, JSON-serializable args/results) -- a
+   malformed step fails the case with a specific reason.
+2. The runner numbers them from 1, hands them to the evaluators with the
+   case's `trajectory` block, and writes one `agent_steps` row per step in
+   the same transaction as the case's result and metric scores.
+3. `GET /runs/{id}` returns each result's `steps` and `trajectory`; the run
+   page draws the timeline and highlights the steps listed in failed
+   evaluators' `evidence.failing_steps`. The dashboard computes no verdicts:
+   every highlight comes from a stored evaluator result.
+
+The example agent (`examples/invoice_agent`) is a LangGraph `StateGraph`
+with a `ToolNode`; its adapter rebuilds the trajectory from the graph's own
+message history (each `AIMessage` tool call paired with its `ToolMessage`).
+Its planner is scripted Python, not a model.
 
 ### Immutability, and how each guarantee is enforced
 
@@ -128,6 +155,8 @@ erDiagram
 | A run only targets a published dataset version | `POST /runs` → `400` | -- |
 | A completed/failed run never changes | `transition()` refuses; no update route | trigger blocks UPDATE/DELETE of the run row |
 | Its results / metric scores never change | `assert_accepts_results()`; no client write route at all | triggers block INSERT/UPDATE/DELETE on `evaluation_results` and `metric_scores` |
+| Its agent steps never change | written only by the worker, with the result | trigger blocks INSERT/UPDATE/DELETE on `agent_steps` (migration `e8b4c2d61a9f`) |
+| A published case's trajectory expectations never change | `PATCH` → `409` | the published-`test_cases` trigger covers every column, `trajectory` included |
 
 Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
 SQLite (migrations `b17cf04aecaf` and `c4e2a91d7b3f`). Tested with raw SQL
@@ -303,6 +332,7 @@ Two more operational findings from getting this running:
 ## Not implemented yet
 
 Release policy engine and gate, regression comparison, replay, trace/span
-persistence, agent trajectory evaluation, safety/adversarial testing, model
+persistence (trajectories are what the adapter reports, not instrumented
+traces), safety/adversarial testing, model
 comparison, LLM-as-judge evaluators, Regression/Trace Explorer/Safety
 dashboard pages, authentication. See the root README.

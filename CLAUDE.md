@@ -13,9 +13,13 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - DB: Postgres via Docker Compose; SQLite via `aiosqlite` is a fallback that can't execute runs
 - Web: Next.js dashboard — `apps/web` (Playwright e2e in `apps/web/e2e`)
 - CLI: Typer (`agentforge`) — `cli/`; shared Pydantic schemas — `packages/core`
-- Evaluators: `packages/evaluators` — `name@version` registry, 9 deterministic evaluators, aggregates
-- SDK: `packages/sdk` (adapter contract: python `module:fn` + http); pricing: `config/pricing.yaml`
-- Example app: `examples/rag_app` (synthetic "Northwind Outfitters"; also `fault_injection`, `http_server`)
+- Evaluators: `packages/evaluators` — `name@version` registry, 16 deterministic evaluators (9 answer/
+  retrieval/measurement + 7 trajectory in `trajectory.py`), aggregates; one dep: `jsonschema`
+- SDK: `packages/sdk` (adapter contract: python `module:fn` + http, optional `steps` trajectory);
+  pricing: `config/pricing.yaml`
+- Example apps: `examples/rag_app` (synthetic "Northwind Outfitters"; also `fault_injection`,
+  `http_server`); `examples/invoice_agent` (LangGraph StateGraph + ToolNode, **scripted planner, not
+  an LLM**; `answer_v1` and `answer_v2` with 5 deliberate regressions) + `datasets/invoice_agent_v1.yaml`
 - Python 3.12, Node 18+
 
 ## Rules (non-negotiable)
@@ -30,7 +34,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - Don't claim something works unless it was actually run. Mark unverified paths as unverified.
 - Immutability: published `DatasetVersion`s and completed/failed runs (with their results and
   metric scores) are frozen — service layer + DB triggers. Runs only target published versions.
-  Only the worker writes results; there is no client route for it.
+  Only the worker writes results; there is no client route for it. Agent steps (`agent_steps`) and a
+  case's `trajectory` expectations are frozen the same way.
+- Trajectories are only what the adapter reports. Never infer, fill in, or time steps on its behalf.
 
 ## Windows notes
 - Use the PowerShell scripts in `scripts/`: `setup.ps1`, `docker-up.ps1`/`docker-down.ps1`,
@@ -56,12 +62,22 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   fixture-based, 3 genuine failures). Tests: SQLite 101 passed + 11 skipped; Postgres 112; Playwright 2.
 - Repo: https://github.com/roshano3o3/agentforge (public). CI jobs: lint (ruff check + format, mypy,
   eslint, tsc), python (Postgres + SQLite), browser (Playwright). Keep all of them green.
+- **Phase 3 done** (agent trajectory evaluation): `agent_steps` table + `test_cases.trajectory`
+  (migration `e8b4c2d61a9f`, triggers on Postgres and SQLite); worker validates and saves steps; 7
+  trajectory evaluators; LangGraph invoice agent v1/v2; run detail trajectory timeline (failing steps
+  red with the evaluator's reason, "show more" for long args/results). Real runs on the Docker stack:
+  v1 10/10 cases passed (100%), v2 4/10 (40%) -- fixture-based (scripted planner). README has the table.
+  Tests: SQLite 150 passed + 14 skipped; Postgres 164; Playwright 4.
 - Legacy Phase 2 fields `expected_answer_contains`/`_regex` are read-only; never rewrite published rows.
+- The dashboard's draft editor PATCHes whole cases: any new TestCase field must be carried through
+  `toTestCaseInput` (apps/web/src/app/datasets/[name]/page.tsx) or a UI edit silently erases it.
+- Playwright case screenshots: grow the viewport to the page height before measuring/clipping
+  (`screenshotCase` in e2e/trajectory-flow.spec.ts); fullPage/element captures came out a line off.
 
 ## Phase plan
 1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done**
 2. Evaluation engine: evaluators, worker + queue (Docker), aggregates — **done**
-3. Agent trajectory evaluation, LangGraph example agent
+3. Agent trajectory evaluation, LangGraph example agent — **done**
 4. Regression engine, release policy, CI gate (`agentforge gate`)
 5. Safety / adversarial testing
 6. OpenTelemetry tracing, Trace Explorer

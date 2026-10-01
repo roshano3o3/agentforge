@@ -42,6 +42,8 @@ function toTestCaseInput(tc: TestCase): TestCaseInput {
     // Carried through unchanged: a draft PATCH replaces the whole case, so
     // dropping this here would silently erase the case's evaluator config.
     evaluators: tc.evaluators,
+    // Same for the case's trajectory expectations.
+    trajectory: tc.trajectory,
   };
 }
 
@@ -53,6 +55,7 @@ function formToTestCaseInput(f: DraftTestCaseForm): TestCaseInput {
     expected_context: splitList(f.expected_context),
     tags: splitList(f.tags),
     evaluators: null, // inherits the version's default evaluators
+    trajectory: null,
   };
 }
 

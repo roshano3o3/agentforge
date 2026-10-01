@@ -445,3 +445,171 @@ details.evidence pre {
   margin-bottom: 8px;
 }
 
+
+/* -- trajectory timeline (run detail) ------------------------------------ */
+
+tr.trajectory-row td {
+  padding-top: 0;
+  background: transparent !important;
+}
+
+.trajectory > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12.5px;
+  padding: 4px 0;
+}
+
+.trajectory-flagged {
+  color: var(--fail);
+  font-weight: 600;
+}
+
+.trajectory-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+ol.steps {
+  list-style: none;
+  border-left: 2px solid var(--border);
+  margin: 6px 0 8px 12px;
+  padding: 0;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: 10px;
+  padding: 8px 10px 8px 0;
+  margin-left: -13px;
+  border-radius: 6px;
+}
+
+.step + .step {
+  border-top: 1px dashed var(--border);
+}
+
+.step-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.step-failing {
+  background: color-mix(in srgb, var(--fail) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--fail);
+}
+
+.step-failing .step-number {
+  background: var(--fail);
+  border-color: var(--fail);
+  color: #fff;
+}
+
+.step-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.step-kind {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.step-tool {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.step-field {
+  margin-top: 3px;
+}
+
+.step-field-label {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+pre.step-value {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.step-field-error pre.step-value {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.step-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.step-flag {
+  border-left: 3px solid var(--fail);
+  padding: 2px 8px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.step-flag .mono {
+  color: var(--fail);
+  font-weight: 600;
+}
+
+.step-flag-reason {
+  color: var(--fg);
+}
+
+.trajectory-unplaced {
+  margin: 4px 0 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 760px) {
+  .step {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+  .step-flags {
+    grid-column: 2;
+  }
+}

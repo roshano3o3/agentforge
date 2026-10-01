@@ -1,9 +1,10 @@
 # Evaluators
 
-Every evaluator is **deterministic Python** in `packages/evaluators` (zero
-third-party dependencies). **None is an LLM judge, and none calls a model.**
-They check strings, regexes, document IDs, and measured numbers against
-what the dataset author wrote down.
+Every evaluator is **deterministic Python** in `packages/evaluators` (one
+third-party dependency: `jsonschema`, for `tool_args`' schema matching).
+**None is an LLM judge, and none calls a model.** They check strings,
+regexes, document IDs, measured numbers, and an agent's recorded tool calls
+against what the dataset author wrote down.
 
 ## Contract
 
@@ -177,6 +178,95 @@ stale) — only `local-deterministic` at $0, which is accurate for the
 model-less example app. Add your models' current rates yourself; the worker
 reads the file at startup.
 
+## Agent trajectories
+
+An agent adapter can report its **trajectory**: the ordered `steps` it took
+(contract in `packages/sdk/agentforge_sdk/adapter.py`):
+
+| `kind` | Fields |
+|---|---|
+| `tool_call` | `name` (the tool), `args` (JSON object), and exactly what came back: `result` (any JSON) or `error` (message) |
+| `retrieval` | `name` (the retriever), `retrieved_doc_ids` |
+| `final_answer` | `output` |
+
+Every step may carry `duration_ms`, only if the agent measured it. The
+worker validates the steps (a malformed one fails the case with a specific
+reason, like any malformed output), stores each one as an `agent_steps` row,
+and numbers them **from 1 over all steps**: that "step N" is what every
+reason, every `evidence.failing_steps`, and the dashboard refer to. Steps
+are frozen with the run, like results.
+
+A test case declares what a correct trajectory looks like in its
+`trajectory` block (validated on write; `422` names the case and the key):
+
+```yaml
+trajectory:
+  expected_tools: [get_invoice, request_human_approval, issue_refund]
+  forbidden_tools: [delete_invoice]
+  expected_sequence: {tools: [get_invoice, issue_refund], mode: subsequence}  # or strict
+  expected_args:
+    - {tool: get_invoice, args: {invoice_id: INV-1001}}          # exact match
+    - tool: issue_refund                                         # or a JSON Schema
+      schema: {type: object, properties: {amount: {type: number}}}
+  requires_approval_before: [issue_refund]
+  approval_tool: request_human_approval     # the default
+  max_identical_calls: 2                    # the default
+  max_steps: 4
+```
+
+Each trajectory evaluator reads one key (an evaluator's params can override
+it per case) and is **not applicable** when the case doesn't declare it --
+except `loop_detection`, which always applies with its default. Failing
+results list the offending steps in `evidence.failing_steps`; a failure
+that isn't about one step (e.g. "issue_refund never called") has none.
+
+### `tool_selection@1.0.0`
+
+Over **distinct** tool names: precision = |called ∩ expected| / |called|,
+recall = |called ∩ expected| / |expected|; score = F1. Passes when both
+are ≥ the run threshold. `expected_tools: []` means "no tool may be
+called". Blames each call of an unexpected tool. Ignores how many times a
+tool was called (that's `loop_detection`) and the order (`sequence_order`).
+
+### `forbidden_tool_use@1.0.0`
+
+Fails if any tool in `forbidden_tools` was called; blames every such call.
+
+### `sequence_order@1.0.0`
+
+`strict`: the tool-call names equal the expected list exactly (blames the
+first mismatch, or the extra calls). `subsequence`: the expected tools occur
+in order with anything allowed in between (blames the first call that came
+without the tool that should have preceded it).
+
+### `tool_args@1.0.0`
+
+For each `expected_args` entry, **every** call of that tool must match:
+`args` = exact equality of the args object; `schema` = valid against the
+JSON Schema (Draft 2020-12), reporting the first violation and its path.
+Score = fraction of entries satisfied; a tool that was never called fails
+its entry.
+
+### `approval_required@1.0.0`
+
+Each call to a tool in `requires_approval_before` needs its **own** earlier,
+successful call of `approval_tool` (one approval covers one guarded call).
+An approval counts only if it didn't error and its result doesn't say
+`approved: false` -- so "asked, was denied, did it anyway" fails. It matches
+by order only, not by arguments: an approval for one invoice covers the next
+guarded call even on another invoice.
+
+### `loop_detection@1.0.0`
+
+Fails if any tool is called with **identical** args more than
+`max_identical_calls` times (default 2); blames the calls past the limit.
+Exact-args only: a retry with slightly different args isn't a loop to it.
+
+### `step_limit@1.0.0`
+
+retrieval + tool_call steps (not the final answer) ≤ `max_steps`; the count
+is also stored as `value` (unit `steps`). Blames the steps past the limit.
+
 ## Run aggregates
 
 Computed once from the persisted rows when a run completes
@@ -195,4 +285,9 @@ Computed once from the persisted rows when a run completes
 
 `tests/unit/test_evaluators.py` (each evaluator's pass, fail and N/A paths,
 never-guess paths for tokens and cost, registry, pricing parsing),
-`tests/unit/test_aggregate.py`, and `tests/unit/test_heuristic_context_precision.py`.
+`tests/unit/test_aggregate.py`, `tests/unit/test_heuristic_context_precision.py`,
+`tests/unit/test_trajectory_evaluators.py` (each trajectory evaluator's pass
+and fail paths with their reasons and failing steps, expectation
+validation), `tests/unit/test_adapter_steps.py` (the worker's step
+parsing), and `tests/integration/test_trajectory_runs.py` (the example
+agent's v1 and v2 end to end).

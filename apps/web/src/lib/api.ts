@@ -8,6 +8,7 @@ import type {
   Evaluator,
   EvaluatorConfig,
   RunCreateInput,
+  TrajectoryExpectations,
 } from "./types";
 
 // Overridable via NEXT_PUBLIC_API_URL for non-default setups; defaults to
@@ -131,6 +132,7 @@ export interface TestCaseInput {
   expected_context: string[];
   tags: string[];
   evaluators: EvaluatorConfig | null;
+  trajectory: TrajectoryExpectations | null;
 }
 
 /** Creates a new DRAFT version (optionally pre-populated). Does not publish it. */

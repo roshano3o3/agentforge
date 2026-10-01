@@ -4,7 +4,7 @@
 
 Production evaluation, safety testing, observability, and release gating for AI agents — a real, working system, not a metrics-dashboard demo.
 
-**This is Phase 2 of a multi-phase build: the evaluation engine.** Runs are submitted through the API (from the CLI or the dashboard), queued in Redis, and executed by an [arq](https://arq-docs.helpmanual.io/) worker that runs **only inside a Linux Docker container**. The worker calls the application's adapter for every test case of a *published* dataset version (with a per-case timeout and full exception capture), scores each case with a registry of versioned deterministic evaluators, and stores results, reasons, evidence and run-level aggregates. Finished runs are immutable, enforced in the service layer and by Postgres triggers. There is still no release gate, no safety testing, no tracing, no LLM-as-judge, and no authentication — see [Current limitations](#current-limitations).
+**This is Phase 3 of a multi-phase build: the evaluation engine plus agent trajectory evaluation.** Runs are submitted through the API (from the CLI or the dashboard), queued in Redis, and executed by an [arq](https://arq-docs.helpmanual.io/) worker that runs **only inside a Linux Docker container**. The worker calls the application's adapter for every test case of a *published* dataset version (with a per-case timeout and full exception capture), scores each case with a registry of versioned deterministic evaluators, and stores results, reasons, evidence and run-level aggregates. For agents, it also stores every step the agent reports (tool name, args, result or error) and checks that trajectory against the case's declared expectations — see [Trajectory evaluation](#trajectory-evaluation). Finished runs are immutable, enforced in the service layer and by Postgres triggers. There is still no release gate, no safety testing, no tracing, no LLM-as-judge, and no authentication — see [Current limitations](#current-limitations).
 
 ## What actually exists right now
 
@@ -13,13 +13,14 @@ Production evaluation, safety testing, observability, and release gating for AI 
   - `python` — `"module:function"`, imported and called in-process by the worker (must be installed in the worker image);
   - `http` — a URL the worker POSTs `{"input", "case_key"}` to (contract in [`packages/sdk/agentforge_sdk/adapter.py`](packages/sdk/agentforge_sdk/adapter.py)).
   A case that raises (even `SystemExit`), hangs past the timeout, or returns a malformed output is recorded as an `error`/`timeout` result with its exception type, message and traceback; the run and the worker carry on.
-- **Evaluators** (`packages/evaluators`, zero dependencies, all deterministic — none is an LLM judge), each registered as `name@version` and pinned per run: `exact_match`, `answer_contains`, `answer_regex`, `heuristic_context_precision`, `heuristic_context_recall`, `citation_correctness`, `latency`, `token_usage`, `estimated_cost`. Every result stores score and/or measured value, pass/fail, a human-readable reason, evidence (including the params used), and the evaluator version. Exact definitions: [`docs/evaluators.md`](docs/evaluators.md).
+- **Evaluators** (`packages/evaluators`, all deterministic — none is an LLM judge; one dependency, `jsonschema`), each registered as `name@version` and pinned per run. Answer/retrieval/measurement: `exact_match`, `answer_contains`, `answer_regex`, `heuristic_context_precision`, `heuristic_context_recall`, `citation_correctness`, `latency`, `token_usage`, `estimated_cost`. **Trajectory** (Phase 3): `tool_selection`, `forbidden_tool_use`, `sequence_order`, `tool_args`, `approval_required`, `loop_detection`, `step_limit`. Every result stores score and/or measured value, pass/fail, a human-readable reason, evidence (including the params used, and for trajectory checks the failing step numbers), and the evaluator version. Exact definitions: [`docs/evaluators.md`](docs/evaluators.md).
+- **Agent trajectories** (Phase 3): an adapter may report the ordered `steps` its agent took; the worker validates them and stores one `agent_steps` row per step, frozen with the run (DB trigger). A test case declares its expectations in a `trajectory` block (validated on write). Example agent: [`examples/invoice_agent`](examples/invoice_agent), a **LangGraph** tool-calling graph with a v1 and a deliberately regressed v2, plus a 10-case dataset, [`datasets/invoice_agent_v1.yaml`](datasets/invoice_agent_v1.yaml).
 - **Per-case evaluator config:** a dataset version declares `default_evaluators`, and each test case can add checks with their parameters (`answer_contains: {phrases: [...]}`, `answer_regex: {pattern: ...}`, `expected_context` overrides, a `latency` budget) or drop a default (`name: false`). A run applies **exactly** each case's resulting set. Configs are validated against the registry when the dataset is written (`422` naming the case and the problem), and they're frozen with the published version — a DB trigger blocks changing a published version's config.
 - **Aggregates**, stored on the run when it finishes: pass rate, per-metric means and pass rates, P50/P95 latency (nearest-rank, ok cases only), and total **estimated** cost (adapter-reported tokens × rates from [`config/pricing.yaml`](config/pricing.yaml), which ships with no vendor prices).
 - **Labels:** every result of a `local-deterministic` run is labeled **fixture-based** (CLI, API, dashboard) — it comes from a synthetic app and deterministic heuristics, not a real model.
 - **CLI** (`agentforge evaluate`) submits a run through the API and polls until it finishes; nothing executes in the CLI process.
-- **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. Loading, empty, error, pending, running and failed states are all real. Regression / Trace Explorer / Safety are still disabled nav links, because none of them exists yet.
-- **Tests:** 114 automated — 112 Python (unit per evaluator and config rule, integration run lifecycle incl. timing-out and crashing cases, per-case config behavior, raw-SQL trigger tests, CLI → API → Redis → Docker worker end-to-end) and 2 Playwright browser tests (one starts a run from the UI and waits for the worker's completed results). See [Testing](#testing).
+- **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. For agent cases, a **trajectory timeline**: every step in order (number, kind, tool, args, result or error), the steps a failed evaluator blamed in red with its reason beside them, failures not tied to one step listed under the timeline, and long args/results collapsed behind "show more". Loading, empty, error, pending, running and failed states are all real. Regression / Trace Explorer / Safety are still disabled nav links, because none of them exists yet.
+- **Tests:** 168 automated — 164 Python (unit per evaluator, config rule and step-parsing rule; integration run lifecycle incl. timing-out and crashing cases; per-case config; the invoice agent's v1 and v2 runs end to end; raw-SQL trigger tests; CLI → API → Redis → Docker worker end-to-end) and 4 Playwright browser tests (two start runs from the UI; the trajectory ones open a v1 and a v2 case and check the highlighted step and its reason). See [Testing](#testing).
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml), every push and pull request), three jobs: **lint** (ruff check, ruff format --check, mypy, eslint, tsc); **python** (the suite against Postgres + Redis service containers with the worker as a container, then again on SQLite); **browser** (Playwright + Chromium against Postgres + Redis with the worker as a container).
 
 Everything in the CLI output and the dashboard comes from real, persisted rows. Nothing is hardcoded.
@@ -116,13 +117,62 @@ agentforge evaluate --app fault-demo --app-version v1 --dataset fault-injection-
 
 The worker container kept running (`RestartCount=0`) and a raw `UPDATE evaluation_runs SET status='running'` on that completed run was rejected by Postgres: `ERROR: evaluation run 705dad19-… is completed and immutable`.
 
+## Trajectory evaluation
+
+An answer can look right while the agent got there the wrong way: refunding without approval, deleting a record it should have voided, retrying a failing call in a loop. Trajectory evaluation checks **how** the agent worked, not just what it said.
+
+1. **The agent reports its steps.** An adapter returns `steps` alongside its answer: each `tool_call` with its tool name, args, and exactly what came back (`result` or `error`), plus `retrieval` and `final_answer` steps ([contract](packages/sdk/agentforge_sdk/adapter.py)). AgentForge records only what the adapter reports — it doesn't instrument the agent or infer steps.
+2. **The dataset declares what a correct trajectory looks like**, per case: expected tools, forbidden tools, required order, required arguments (exact or JSON Schema), which tools need a prior human approval, a loop limit, a step budget. The expectations are written from the domain's rules, not from any agent's output, and they're frozen with the published dataset version.
+3. **Seven deterministic evaluators** compare the two (definitions in [`docs/evaluators.md`](docs/evaluators.md#agent-trajectories)). Each failure names the step that broke the rule — "issue_refund called at step 3 after request_human_approval at step 2 was denied" — and lists it in `evidence.failing_steps`, which is what the dashboard highlights.
+
+None of this is an LLM judgment; every check is a rule over recorded tool calls.
+
+### Example: a LangGraph invoice agent, v1 vs v2
+
+[`examples/invoice_agent`](examples/invoice_agent) is a real LangGraph `StateGraph` with a `ToolNode` over eight tools on a synthetic ledger (look up invoices/customers/payments, request approval, refund, remind, void, delete). Its **planner is scripted Python, not a model** — that keeps runs reproducible and model-free, so these results are **fixture-based**: they show the evaluators catching real trajectory bugs in a real graph, not the quality of any model. v2 is a "refactor" with five deliberate regressions: refunds under $100 skip approval; approval is checked by key presence (`"approved" in result`), so a denied refund goes ahead; refund amounts are sent as strings; a failed lookup is retried with identical args; reminders skip the status check and voids use `delete_invoice`.
+
+Both versions against [`datasets/invoice_agent_v1.yaml`](datasets/invoice_agent_v1.yaml) (10 cases), on the Docker stack (`agentforge evaluate --app invoice-agent --app-version v1|v2 --dataset invoice-agent --adapter invoice_agent.adapter:answer_v1|answer_v2`; runs `693b8fd3…` and `1fc9489b…`):
+
+| Evaluator (pass rate over the cases it applies to) | Applies to | v1 | v2 |
+|---|---|---|---|
+| **Cases passed** | 10 | **10 / 10 (100%)** | **4 / 10 (40%)** |
+| `tool_selection` | 10 | 100% | 50% |
+| `forbidden_tool_use` | 5 | 100% | 40% |
+| `sequence_order` | 4 | 100% | 50% |
+| `tool_args` | 5 | 100% | 60% |
+| `approval_required` | 3 | 100% | 0% |
+| `loop_detection` | 10 | 100% | 90% |
+| `step_limit` | 5 | 100% | 80% |
+| `answer_contains` | 9 | 100% | 67% |
+| `answer_regex` | 1 | 100% | 100% |
+| Latency p50 / p95 (ok cases, nearest-rank) | | 5.4 / 16.5 ms | 6.9 / 11.5 ms |
+
+The six v2 failures, each caught at the step that caused it:
+
+| Case | v2 regression | Failed checks (blamed step) |
+|---|---|---|
+| `refund-small-001` | skipped approval under $100; amount `"40.00"` | `approval_required` (2), `tool_args` (2: `'40.00' is not of type 'number'`), `sequence_order` (2), `tool_selection` (recall 0.67) |
+| `refund-over-limit-001` | refunded after approval was **denied** | `approval_required` (3), `forbidden_tool_use` (3), `tool_selection` (3), `answer_contains` |
+| `void-duplicate-001` | `delete_invoice` instead of an approved void | `forbidden_tool_use` (2), `approval_required` (2), `tool_selection` (2), `tool_args` (`void_invoice` never called), `answer_contains` |
+| `reminder-paid-001` | reminded a customer whose invoice is paid | `forbidden_tool_use` (2), `tool_selection` (1, 2), `answer_contains` |
+| `reminder-overdue-001` | reminder without the status check | `sequence_order` (2), `tool_selection` (recall 0.67) |
+| `status-unknown-001` | retried a failing lookup 3× with identical args | `loop_detection` (2, 3), `step_limit` (3) |
+
+Two of those final answers (`refund-small-001`, `reminder-overdue-001`) pass every answer check — only the trajectory shows the problem. The four cases v2 didn't touch (status lookup, billing contact, payment history, out-of-scope refusal) pass in both. Every number above comes from those two persisted runs; the same assertions are pinned in `tests/integration/test_trajectory_runs.py`.
+
+In the dashboard, the v2 run's `refund-over-limit-001` (from the Playwright run):
+
+![v2 failing trajectory: step 3 highlighted with the approval_required, forbidden_tool_use and tool_selection reasons](docs/screenshots/trajectory-v2-failing.png)
+
+and the same request under v1, nothing flagged: [`trajectory-v1-passing.png`](docs/screenshots/trajectory-v1-passing.png) (`refund-small-001`).
+
 ## Dataset version lifecycle
 
 Unchanged from Phase 1: a `DatasetVersion` is a **draft** (edit test cases freely) until **published**, then frozen forever — enforced by the service layer (`409` on PATCH) and independently by DB triggers. "Editing" a published version means `POST .../new-draft`. Runs may only target published versions (`400` otherwise), so a run's dataset can never change under it. A version's evaluator config (`default_evaluators` and each case's `evaluators`) is part of that frozen content.
 
 Versions published in Phase 2 used two per-case fields, `expected_answer_contains` and `expected_answer_regex`, instead of per-case config. They're kept read-only and still honored: those versions have no default config, so every pinned evaluator applies as before, with the legacy fields supplied as `answer_contains`/`answer_regex` params at run time. Their stored rows are never rewritten. A new draft made from such a version converts the fields into explicit per-case config. New data can't use them (`422`: unknown fields are rejected rather than silently dropped).
 
-Screenshots from the real Playwright run, in `docs/screenshots/`: [`runs.png`](docs/screenshots/runs.png), [`run-new-form.png`](docs/screenshots/run-new-form.png), [`run-detail-completed.png`](docs/screenshots/run-detail-completed.png), [`applications.png`](docs/screenshots/applications.png), [`dataset-draft-editing.png`](docs/screenshots/dataset-draft-editing.png), [`dataset-published-locked.png`](docs/screenshots/dataset-published-locked.png), [`dataset-v2-from-v1.png`](docs/screenshots/dataset-v2-from-v1.png).
+Screenshots from the real Playwright run, in `docs/screenshots/`: [`runs.png`](docs/screenshots/runs.png), [`run-new-form.png`](docs/screenshots/run-new-form.png), [`run-detail-completed.png`](docs/screenshots/run-detail-completed.png), [`trajectory-v1-passing.png`](docs/screenshots/trajectory-v1-passing.png), [`trajectory-v2-failing.png`](docs/screenshots/trajectory-v2-failing.png), [`run-detail-trajectory-v2.png`](docs/screenshots/run-detail-trajectory-v2.png), [`applications.png`](docs/screenshots/applications.png), [`dataset-draft-editing.png`](docs/screenshots/dataset-draft-editing.png), [`dataset-published-locked.png`](docs/screenshots/dataset-published-locked.png), [`dataset-v2-from-v1.png`](docs/screenshots/dataset-v2-from-v1.png).
 
 ## Architecture
 
@@ -143,11 +193,12 @@ cd apps\web ; npx eslint src e2e playwright.config.ts ; npm run typecheck   # ne
 Run `docker-up.ps1` first for the Docker modes. The test scripts rebuild the worker image (cached) so the test worker runs the checked-out code, use their own databases and Redis DB indexes, and remove their worker containers afterwards — the dev database and dev queue (Redis DB 0) are never touched.
 
 - **Unit** (`tests/unit`): every evaluator with its per-case params (including not-applicable and never-guess paths for tokens/cost), config validation and merge rules, the registry, pricing parsing, and aggregation/percentiles.
+- **Trajectories** (`test_trajectory_runs.py`, `tests/unit/test_trajectory_evaluators.py`, `tests/unit/test_adapter_steps.py`): the invoice agent's v1 passes all 10 cases with every step persisted in order (args, results, tool errors); every v2 regression fails exactly the evaluators that should catch it, with the exact reasons and failing step numbers; trajectory blocks are validated on write (`422`), carried to new drafts and frozen when published; a restarted run replaces partial steps; malformed steps from an adapter are rejected with specific reasons; each trajectory evaluator's pass and fail paths.
 - **Per-case config** (`test_evaluator_config.py`): a run applies exactly each case's configured evaluators (dropped defaults stay dropped, params land in evidence, aggregates count only applied cases); explicit `--evaluators` filters; a config that applies nothing is rejected; invalid configs and retired fields are rejected on write; PATCH keeps the default config unless it's sent; Phase 2 legacy fields still apply and convert on new-draft without rewriting the published row.
 - **Integration** (`tests/integration`): the run lifecycle through the real API with the worker's real `execute_run` — pending + enqueued, draft/unknown-evaluator/malformed-adapter rejection, unreachable queue → run marked failed + `503`, full completion with every evaluator, **a timing-out case and crashing cases** (`RuntimeError`, `SystemExit`, malformed output) recorded while the run completes, finished-run immutability in the service layer, restart after a dead worker, unimportable adapter → failed run with reason, and the HTTP adapter contract against a real local HTTP server. Plus datasets/applications as before.
-- **DB triggers** (`test_db_triggers.py`, Postgres mode only — the SQLite test schema comes from `create_all`, which has no triggers): raw SQL bypassing API and ORM. Published test cases can't be inserted/updated/deleted; a published version can't be un-published or have its evaluator config, number or publish time changed; a completed run can't be updated or deleted, and its results and metric scores can't be inserted, updated or deleted; a control shows a *running* run is writable.
+- **DB triggers** (`test_db_triggers.py`, Postgres mode only — the SQLite test schema comes from `create_all`, which has no triggers): raw SQL bypassing API and ORM. Published test cases (including their trajectory expectations) can't be inserted/updated/deleted; a published version can't be un-published or have its evaluator config, number or publish time changed; a completed run can't be updated or deleted, and its results, metric scores and agent steps can't be inserted, updated or deleted; controls show a *running* run is writable, while step constraints (unique step number, known kind, 1-based) still hold.
 - **E2E** (`tests/e2e`, needs `-Postgres`): the real CLI (subprocess) → uvicorn API → Redis → the worker **container** → Postgres, for the example dataset and the fault-injection dataset (and a follow-up run proving the worker survived).
-- **Browser** (`apps/web/e2e`): the dataset lifecycle (draft → edit → publish → locked with a real `409` → new version), and **starting a run from the UI**, following it to `completed`, and checking per-case verdicts and reasons.
+- **Browser** (`apps/web/e2e`): the dataset lifecycle (draft → edit → publish → locked with a real `409` → new version); **starting a run from the UI**, following it to `completed`, and checking per-case verdicts and reasons; and **trajectories**: start the invoice agent's v1 and v2 runs from the UI, open a case's timeline, check every step in order with nothing flagged (v1) and "show more" on a long result, then open v2's failing `refund-over-limit-001` and check that step 3 is highlighted red with the `approval_required` and `forbidden_tool_use` reasons beside it while step 2 (the denial) isn't.
 
 **Note:** Next.js's dev server holds a lock per project directory — stop `dev-web.ps1` before `test-ui.ps1`.
 
@@ -155,13 +206,13 @@ Last run in this environment (Python 3.12.7, Windows 11, Docker Desktop 29.8.1, 
 
 | Suite | Result |
 |---|---|
-| `test.ps1` (SQLite) | 101 passed, 11 skipped (9 trigger tests, 2 worker e2e tests) |
-| `test.ps1 -Postgres` | 112 passed |
-| `test-ui.ps1` | 2 passed |
+| `test.ps1` (SQLite) | 150 passed, 14 skipped (12 trigger tests, 2 worker e2e tests) |
+| `test.ps1 -Postgres` | 164 passed |
+| `test-ui.ps1` | 4 passed |
 | ruff check / ruff format --check / mypy / eslint / tsc | all clean |
 | CI (GitHub Actions, ubuntu: lint, python, browser jobs) | see the badge above |
 
-The per-case config migration (`d7a3e5c19f2b`) round-trips on SQLite (upgrade → downgrade → upgrade), and its SQLite trigger was checked directly: a draft's config can change, a published version's can't. The Phase 2 migration was also checked by hand on both engines against Phase 1-shaped data (a scored run and a stuck `running` run): upgrade carried the scores over as `heuristic_context_precision@1.0.0` metric rows labeled fixture-based and marked the stuck run failed; all new triggers blocked; the dataset triggers survived; downgrade → upgrade round-tripped. No coverage percentage is claimed because none has been measured.
+The agent-steps migration (`e8b4c2d61a9f`) round-trips on SQLite (upgrade → downgrade → upgrade); afterwards all 16 triggers exist (the dataset ones survive) and a raw `UPDATE agent_steps` on a completed run is rejected. The per-case config migration (`d7a3e5c19f2b`) round-trips on SQLite (upgrade → downgrade → upgrade), and its SQLite trigger was checked directly: a draft's config can change, a published version's can't. The Phase 2 migration was also checked by hand on both engines against Phase 1-shaped data (a scored run and a stuck `running` run): upgrade carried the scores over as `heuristic_context_precision@1.0.0` metric rows labeled fixture-based and marked the stuck run failed; all new triggers blocked; the dataset triggers survived; downgrade → upgrade round-tripped. No coverage percentage is claimed because none has been measured.
 
 ## Repository layout
 
@@ -170,12 +221,13 @@ apps/api/            FastAPI backend: models, Alembic migrations, routers, run s
 apps/worker/         arq worker: adapter invocation w/ timeouts (adapters.py), run execution (runner.py) -- Docker only
 apps/web/            Next.js dashboard + e2e/ (Playwright)
 packages/core/       Shared Pydantic request/response schemas (api, cli, worker)
-packages/evaluators/ Evaluator registry, evaluators, pricing parser, aggregation (zero dependencies)
+packages/evaluators/ Evaluator registry, evaluators (incl. trajectory), pricing parser, aggregation
 packages/sdk/        Adapter contract (python + http) + AgentForgeClient (httpx only)
 cli/                 `agentforge` CLI (Typer)
 examples/rag_app/    Synthetic RAG app: adapter, fault-injection adapter, stdlib HTTP adapter server
+examples/invoice_agent/  Synthetic LangGraph invoice agent (scripted planner): v1 + regressed v2 adapters
 config/pricing.yaml  Per-model rates for estimated cost (no vendor prices shipped)
-datasets/            rag_support_v1.yaml, fault_injection_demo.yaml
+datasets/            rag_support_v1.yaml, fault_injection_demo.yaml, invoice_agent_v1.yaml
 tests/               unit / integration / e2e (Python)
 .github/workflows/   ci.yml
 docs/                architecture.md, evaluators.md, screenshots/
@@ -198,14 +250,19 @@ Read this before assuming a feature exists.
 - **No-Docker (SQLite) mode can't execute runs** (see Quick start). The SQLite path remains for the API, datasets, and the in-process test suite.
 - **Docker Compose and the PowerShell scripts are exercised on one Windows machine only.** CI (Linux) runs the same tests, but with GitHub service containers and `docker run`, not Compose.
 - **Per-case config can't be edited in the dashboard yet.** The dataset page shows each version's default and per-case evaluator config; set it through the YAML file (`agentforge dataset publish`) or the API. Cases added in the UI inherit the version's defaults.
-- **No release gate, regression comparison, safety/adversarial testing, trace persistence, or agent trajectory evaluation** — later phases.
+- **Trajectories are self-reported.** AgentForge records the steps the adapter returns; it doesn't instrument the agent, so an adapter that omits or misreports a step is evaluated on what it reported. Step timings exist only if the agent reports them (the example reports none). OpenTelemetry tracing is Phase 6.
+- **The example agent's planner is scripted, not an LLM.** The LangGraph graph, `ToolNode`, tool calls and errors are real; the decision of which tool to call next is deterministic Python. Its results are fixture-based and its v2 regressions were written on purpose. No real agent framework other than LangGraph has been exercised, and parallel tool calls in one turn are supported by the adapter but not exercised by the example.
+- **Trajectory checks are literal rules, not judgment.** `approval_required` matches approvals to guarded calls by order only, not by arguments (an approval for one invoice covers the next guarded call on another); `loop_detection` only sees *identical* args; `tool_selection` compares distinct tool names and ignores call counts; nothing judges whether a step was *wise* beyond what the dataset declares.
+- **Steps are stored in full**, with no size cap on args/results (the dashboard collapses long ones); the run page loads every case's steps at once, with no pagination.
+- **Trajectory expectations can't be edited in the dashboard** — set them in the dataset YAML or through the API, like per-case evaluator config.
+- **No release gate, regression comparison, safety/adversarial testing, or trace persistence** — later phases.
 - **A known SQLite-only quirk:** timestamps re-read from SQLite can lose their UTC-offset suffix (same instant). Postgres doesn't.
 - **A draft PATCH replaces the entire test-case set**, not a partial merge.
 - **`agentforge.yaml` (from `agentforge init`) is not read by anything yet.**
 
 ## What's next
 
-Phase 3 (agent trajectory evaluation, LangGraph example agent), Phase 4 (regression engine, release policy, CI gate), Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
+Phase 4 (regression engine, release policy, CI gate — v1 vs v2 above is exactly the comparison it will automate), Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
 
 ## License
 

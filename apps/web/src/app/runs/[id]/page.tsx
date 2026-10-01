@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LabelBadges, StatusBadge } from "@/components/RunBadges";
+import Trajectory from "@/components/Trajectory";
 import { ApiError, getRun } from "@/lib/api";
 import { formatEstimatedUsd, formatMs, formatPct, formatScore, formatValue, isActive } from "@/lib/format";
 import type { EvaluationResult, EvaluationRun, MetricScore } from "@/lib/types";
@@ -36,6 +37,27 @@ function MetricChip({ metric }: { metric: MetricScore }) {
         <pre>{JSON.stringify(metric.evidence, null, 2)}</pre>
       </details>
     </div>
+  );
+}
+
+/** Agent cases (steps reported, or trajectory expectations declared) get a
+ * trajectory timeline under their row; plain RAG cases don't. */
+function hasTrajectory(result: EvaluationResult): boolean {
+  return result.steps.length > 0 || result.trajectory !== null;
+}
+
+function CaseRows({ result }: { result: EvaluationResult }) {
+  return (
+    <tbody data-case={result.case_key}>
+      <ResultRow result={result} />
+      {hasTrajectory(result) && (
+        <tr className="trajectory-row">
+          <td colSpan={4}>
+            <Trajectory result={result} />
+          </td>
+        </tr>
+      )}
+    </tbody>
   );
 }
 
@@ -281,16 +303,15 @@ export default function RunDetailPage() {
                     <th>Evaluators (score, verdict, reason)</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {run.results.map((result) => (
-                    <ResultRow key={result.id} result={result} />
-                  ))}
-                </tbody>
+                {run.results.map((result) => (
+                  <CaseRows key={result.id} result={result} />
+                ))}
               </table>
             </div>
           )}
           <p className="meta-line" style={{ marginTop: 8 }}>
-            Doc pills: green = expected-relevant, † = cited in the answer.
+            Doc pills: green = expected-relevant, † = cited in the answer. Trajectory steps are numbered from 1 over
+            every reported step; a red step is one a failed evaluator blamed, with its reason beside it.
           </p>
         </>
       )}

@@ -39,8 +39,8 @@ test("start a run from the UI and see the worker's completed per-case results", 
   await select("Dataset").selectOption({ label: "rag-support" });
   await expect(select("Published version")).toContainText("5 cases");
   await expect(form.getByRole("textbox", { name: "Adapter target" })).toHaveValue("rag_app.adapter:answer");
-  // Every registered evaluator is pre-selected.
-  await expect(form.getByRole("checkbox")).toHaveCount(9);
+  // Every registered evaluator is pre-selected: 9 answer/retrieval/measurement + 7 trajectory.
+  await expect(form.getByRole("checkbox")).toHaveCount(16);
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "run-new-form.png"), fullPage: true });
 
   await form.getByRole("button", { name: "Start run" }).click();
