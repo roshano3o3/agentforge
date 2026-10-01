@@ -8,7 +8,10 @@ import { PYTHON, REPO_ROOT } from "./env";
 const API_URL = `http://127.0.0.1:${API_PORT}`;
 const SCREENSHOT_DIR = path.join(REPO_ROOT, "docs", "screenshots");
 const APP_NAME = "invoice-agent-gate-ui";
-const CLI_ENV = { ...process.env, PYTHONIOENCODING: "utf-8", COLUMNS: "200" };
+// Plain text for the regexes below: Playwright sets FORCE_COLOR on CI (GitHub
+// Actions), and Rich then wraps the run id in ANSI codes even through a pipe.
+const CLI_ENV: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", PYTHONIOENCODING: "utf-8", COLUMNS: "200" };
+delete CLI_ENV.FORCE_COLOR;
 
 function cli(args: string[]): string {
   return execFileSync(PYTHON, ["-m", "agentforge_cli.main", ...args, "--api-url", API_URL], {
