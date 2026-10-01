@@ -11,6 +11,11 @@ Metrics a policy can name (direction decides which rules make sense):
     <evaluator>.mean_score    higher is better   e.g. tool_selection.mean_score
     <evaluator>.pass_rate     higher is better   over the cases the evaluator applied to
     <evaluator>.mean_value    lower is better    measurements: ms, tokens, usd, steps
+    safety.<category>.pass_rate higher is better case pass rate of one attack category
+                                                 (aggregates.safety.by_category), e.g.
+                                                 safety.unauthorized_tool.pass_rate
+    safety.injection.pass_rate  higher is better pooled over injection_direct and
+                                                 injection_indirect (passed / cases of both)
 
 Policy (the `release_policy` block of agentforge.yaml):
 
@@ -37,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from agentforge_evaluators.registry import UnknownEvaluatorError, resolve
+from agentforge_evaluators.safety import ATTACK_CATEGORIES
 
 Direction = Literal["higher", "lower"]
 EPSILON = 1e-9
@@ -55,6 +61,8 @@ REGRESSION_KEYS: dict[Direction, tuple[str, str]] = {
     "lower": ("max_increase", "max_increase_pct"),
 }
 CASE_CLASSES = ("newly_failing", "fixed", "still_failing", "still_passing")
+# Pooled safety groups: the group's pass rate is passed / cases over its categories.
+SAFETY_GROUPS: dict[str, tuple[str, ...]] = {"injection": ("injection_direct", "injection_indirect")}
 
 
 class PolicyError(ValueError):
@@ -68,10 +76,23 @@ class RegressionError(ValueError):
 # -- metrics ------------------------------------------------------------------------
 
 
+def _safety_metric(metric: str) -> str | None:
+    """'safety.<category or group>.pass_rate' -> the category or group; None if not a safety metric."""
+    if not metric.startswith("safety."):
+        return None
+    name, dot, stat = metric.removeprefix("safety.").rpartition(".")
+    known = [*ATTACK_CATEGORIES, *SAFETY_GROUPS]
+    if not dot or stat != "pass_rate" or name not in known:
+        raise PolicyError(f"unknown safety metric '{metric}' (known: safety.<{' | '.join(known)}>.pass_rate)")
+    return name
+
+
 def metric_direction(metric: str) -> Direction:
     """Direction of a policy metric name; raises PolicyError for unknown names."""
     if metric in RUN_METRICS:
         return RUN_METRICS[metric]
+    if _safety_metric(metric) is not None:
+        return "higher"
     name, dot, stat = metric.rpartition(".")
     if not dot or stat not in EVALUATOR_STATS or not name:
         known = ", ".join([*RUN_METRICS, *(f"<evaluator>.{s}" for s in EVALUATOR_STATS)])
@@ -224,8 +245,19 @@ def _evaluator_entry(agg: Mapping[str, Any], name: str) -> Mapping[str, Any] | N
     return None
 
 
+def safety_pass_rate(aggregates: Mapping[str, Any], name: str) -> float | None:
+    """A category's (or pooled group's) case pass rate; None if the run has none of its cases."""
+    by_category = (aggregates.get("safety") or {}).get("by_category") or {}
+    entries = [by_category[c] for c in SAFETY_GROUPS.get(name, (name,)) if c in by_category]
+    cases = sum(e["cases"] for e in entries)
+    return sum(e["passed"] for e in entries) / cases if cases else None
+
+
 def metric_value(snapshot: RunSnapshot, metric: str) -> float | None:
     agg = snapshot.aggregates
+    safety_name = _safety_metric(metric)
+    if safety_name is not None:
+        return safety_pass_rate(agg, safety_name)
     cases = agg.get("case_count") or 0
     if metric == "pass_rate":
         return agg.get("pass_rate")
@@ -241,7 +273,7 @@ def metric_value(snapshot: RunSnapshot, metric: str) -> float | None:
 
 
 def _evaluator_version(snapshot: RunSnapshot, metric: str) -> str | None:
-    if metric in RUN_METRICS:
+    if metric in RUN_METRICS or metric.startswith("safety."):
         return None
     entry = _evaluator_entry(snapshot.aggregates, metric.rpartition(".")[0])
     return None if entry is None else entry.get("version")
@@ -280,6 +312,14 @@ def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> dict[str, Any]:
             }
         )
 
+    categories = sorted(
+        {c for s in (baseline, candidate) for c in ((s.aggregates.get("safety") or {}).get("by_category") or {})}
+    )
+    safety = {
+        c: delta(safety_pass_rate(baseline.aggregates, c), safety_pass_rate(candidate.aggregates, c))
+        for c in categories
+    }
+
     classes: dict[str, list[dict[str, Any]]] = {k: [] for k in CASE_CLASSES}
     for key in sorted(set(baseline.cases) | set(candidate.cases)):
         b_case, c_case = baseline.cases.get(key), candidate.cases.get(key)
@@ -306,6 +346,8 @@ def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> dict[str, Any]:
         "dataset_version_id": candidate.dataset_version_id,
         "summary": summary,
         "metrics": metrics,
+        # Per attack category, for adversarial datasets (empty otherwise).
+        "safety": safety,
         "cases": classes,
         "case_counts": {k: len(v) for k, v in classes.items()},
     }

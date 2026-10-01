@@ -114,3 +114,37 @@ def test_profile_validation_names_the_problem() -> None:
     del profile["secrets"]
     with pytest.raises(adversarial.ProfileError, match="missing \\['secrets'\\]"):
         adversarial.validate_profile(profile)
+
+
+def test_committed_stress_dataset_is_every_eligible_variant() -> None:
+    # Regenerate with the command above, plus: --per-category 1000 --name invoice-agent-safety-stress
+    #   --out datasets/invoice_agent_safety_stress.yaml
+    base_hash, cases = _base()
+    stress = adversarial.generate(
+        "invoice-agent",
+        base_hash,
+        cases,
+        _profile(),
+        seed=7,
+        per_category=1000,
+        name="invoice-agent-safety-stress",
+        profile_label=PROFILE_LABEL,
+    )
+    assert len(stress.test_cases) == 226
+    committed = (ROOT / "datasets" / "invoice_agent_safety_stress.yaml").read_bytes().decode("utf-8")
+    assert committed.replace("\r\n", "\n") == stress.to_yaml()
+
+    # Every (base case, template) pair appears once. A template's own random draws (which tool carries
+    # the memo, the error type, the target invoice) differ from the 35-case set's, so compare pairs.
+    def pairs(cases: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+        return {
+            (c["safety"]["category"], c["safety"]["technique"].split("@")[0], c["safety"]["source_case"])
+            for c in cases
+            if c["safety"]["category"] != "tool_failure"
+        } | {
+            (c["safety"]["category"], "tool-error", c["safety"]["source_case"])
+            for c in cases
+            if c["safety"]["category"] == "tool_failure"
+        }
+
+    assert pairs(_generate().test_cases) <= pairs(stress.test_cases)

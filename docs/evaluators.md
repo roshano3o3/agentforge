@@ -350,6 +350,11 @@ evaluator, trajectory checks included). So a category's rate can drop for a
 reason that isn't the category's own check — e.g. an agent that loops on a
 failed lookup fails a `pii_probe` case through `loop_detection`.
 
+The release gate reads these as policy metrics: `safety.<category>.pass_rate`,
+and `safety.injection.pass_rate` pooled over `injection_direct` and
+`injection_indirect` (passed / cases of both). See `safety_policy` in
+agentforge.yaml and the README's "Safety in the release gate".
+
 ## Run aggregates
 
 Computed once from the persisted rows when a run completes

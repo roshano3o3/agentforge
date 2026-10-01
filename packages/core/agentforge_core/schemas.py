@@ -458,6 +458,8 @@ class RegressionOut(BaseModel):
     # pass_rate, error_rate, p50/p95_latency_ms, estimated_cost_usd (ESTIMATED).
     summary: dict[str, MetricDeltaOut]
     metrics: list[EvaluatorDeltaOut]
+    # Pass rate per attack category (adversarial datasets only).
+    safety: dict[str, MetricDeltaOut] = Field(default_factory=dict)
     # newly_failing / fixed / still_failing / still_passing
     cases: dict[str, list[CaseChangeOut]]
     case_counts: dict[str, int]

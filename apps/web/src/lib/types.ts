@@ -274,6 +274,8 @@ export interface RegressionReport {
   dataset_version_id: string;
   summary: Record<string, MetricDelta>;
   metrics: EvaluatorDelta[];
+  // Pass rate per attack category (adversarial datasets; empty otherwise).
+  safety: Record<string, MetricDelta>;
   cases: Record<CaseClass, CaseChange[]>;
   case_counts: Record<CaseClass, number>;
 }

@@ -1,10 +1,11 @@
 name: AgentForge release gate
 
 # On every pull request: evaluate the example invoice agent as the base branch
-# has it (the production baseline) and as the PR has it (the candidate), then
-# run `agentforge gate` with the base branch's release policy. The gate table
-# is posted as one PR comment (updated on each push), and this check fails
-# when the gate does. Logic: scripts/ci-gate.sh.
+# has it (the baseline) and as the PR has it (the candidate), on the trajectory
+# dataset and the adversarial (safety) dataset, then run `agentforge gate` for
+# each with the base branch's `release_policy` / `safety_policy`. Both tables
+# are posted as one PR comment (updated on each push), and this check fails
+# when either gate does. Logic: scripts/ci-gate.sh.
 
 on:
   pull_request:

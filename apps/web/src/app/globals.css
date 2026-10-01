@@ -681,3 +681,32 @@ pre.step-value {
 tr.check-failed td {
   background: color-mix(in srgb, var(--fail) 7%, transparent);
 }
+
+/* -- safety page --------------------------------------------------------- */
+
+tr.row-selected td {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.safety-case {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--fail);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.safety-case summary {
+  cursor: pointer;
+}
+
+.safety-case-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.safety-reasons {
+  margin-left: 18px;
+}

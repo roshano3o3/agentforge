@@ -571,9 +571,15 @@ def gate(
     candidate: str = typer.Option(..., "--candidate", help="Candidate run id."),
     baseline: str = typer.Option(..., "--baseline", help="Baseline environment (e.g. production) or run id."),
     config: Path = typer.Option(Path("agentforge.yaml"), "--config", help="Project config with release_policy."),
+    policy_key: str = typer.Option(
+        "release_policy", "--policy", help="Which policy in the config to apply: release_policy or safety_policy."
+    ),
     api_url: str | None = typer.Option(None, "--api-url", help="Default: api_url from the config, else localhost."),
     markdown: Path | None = typer.Option(
         None, "--markdown", help="Also write the Markdown report to this file (e.g. for a PR comment)."
+    ),
+    title: str | None = typer.Option(
+        None, "--title", help="Write the Markdown report as a titled section (for combining several gates)."
     ),
 ) -> None:
     """Evaluate the release policy for CANDIDATE against BASELINE.
@@ -588,12 +594,13 @@ def gate(
     except ConfigError as exc:
         console.print(f"[red]Invalid config:[/red] {escape(str(exc))}")
         raise typer.Exit(code=2) from None
-    if project.policy is None:
-        console.print(f"[red]Invalid config:[/red] {config} has no release_policy")
+    policy = project.policies.get(policy_key)
+    if policy is None:
+        console.print(f"[red]Invalid config:[/red] {config} has no {escape(policy_key)}")
         raise typer.Exit(code=2)
     with AgentForgeClient(base_url=api_url or project.api_url or DEFAULT_API_URL) as client:
         try:
-            decision = client.create_release_decision(candidate, baseline, project.policy.to_dict())
+            decision = client.create_release_decision(candidate, baseline, policy.to_dict())
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Gate could not be evaluated:[/red] {escape(str(exc))}")
             raise typer.Exit(code=2) from None
@@ -602,7 +609,7 @@ def gate(
         f"Release gate for [bold]{decision['application_name']}[/bold]: candidate {decision['candidate_run_id']} "
         f"vs baseline '{decision['baseline_ref']}' (run {decision['baseline_run_id']})"
     )
-    table = Table(title=f"Checks ({config})")
+    table = Table(title=f"Checks ({config}: {policy_key})")
     for col in ("Result", "Check", "Metric", "Baseline", "Candidate", "Delta", "Threshold", "Reason"):
         table.add_column(col, overflow="fold")
     for c in decision["checks"]:
@@ -627,12 +634,12 @@ def gate(
     console.print(f"Decision {decision['id']} recorded (immutable).")
 
     if markdown is not None:
-        markdown.write_text(markdown_report(decision), encoding="utf-8")
+        markdown.write_text(markdown_report(decision, title), encoding="utf-8")
         console.print(f"Markdown report written to {markdown}")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:
-            f.write(markdown_report(decision))
+            f.write(markdown_report(decision, title))
         console.print(f"Markdown report appended to {summary_path}")
 
     # Plain print: the last line is exactly this, for scripts and CI logs.

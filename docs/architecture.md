@@ -1,4 +1,4 @@
-# Architecture — through Phase 5 part A (evaluation engine, trajectories, release gate, adversarial testing)
+# Architecture — through Phase 5 (evaluation engine, trajectories, release gate, adversarial & safety testing)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -159,6 +159,13 @@ pure function of (base cases, profile, seed): per category its own
 same inputs give byte-identical YAML (checked by a test against the
 committed dataset). The run's aggregates add `safety.by_category` from each
 case's `safety.category`.
+
+The release gate reads those per-category rates as policy metrics
+(`safety.<category>.pass_rate`, plus the pooled `safety.injection.pass_rate`),
+and the regression report carries per-category deltas (`safety`), which the
+dashboard's Safety page shows. A separate `safety_policy` in agentforge.yaml
+gates runs of the adversarial dataset; the CI gate evaluates both datasets for
+the base branch and the PR and gates each with its own policy.
 
 ### Agent trajectories: how a step gets from the agent to the dashboard
 
@@ -366,8 +373,7 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Safety checks in the release gate and a dashboard view of per-category
-results (Phase 5 part B), replay, trace/span persistence (trajectories are
+Replay, trace/span persistence (trajectories are
 what the adapter reports, not instrumented traces), model comparison,
-LLM-as-judge evaluators, Trace Explorer/Safety dashboard pages,
+LLM-as-judge evaluators, the Trace Explorer page,
 authentication. See the root README.
