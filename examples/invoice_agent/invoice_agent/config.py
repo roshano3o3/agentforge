@@ -8,6 +8,7 @@ gate judges. (The fixed `answer_v1` / `answer_v2` presets ignore this file.)
 
 from invoice_agent.agent import Behavior
 
+# Settings are grouped by flow: refunds (approval, amounts), lookups, reminders, voids.
 BEHAVIOR = Behavior(
     approval_exempt_under_usd=0.0,
     approval_check="value",
