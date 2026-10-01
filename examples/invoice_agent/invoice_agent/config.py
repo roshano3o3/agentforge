@@ -6,14 +6,6 @@ and the pull request's copy, so changing a setting here is a code change the
 gate judges. (The fixed `answer_v1` / `answer_v2` presets ignore this file.)
 """
 
-from invoice_agent.agent import Behavior
+from invoice_agent.agent import V1
 
-# Settings are grouped by flow: refunds (approval, amounts), lookups, reminders, voids.
-BEHAVIOR = Behavior(
-    approval_exempt_under_usd=0.0,
-    approval_check="value",
-    amount_as_string=False,
-    lookup_attempts=1,
-    check_status_before_reminder=True,
-    void_tool="void_invoice",
-)
+BEHAVIOR = V1
