@@ -13,6 +13,9 @@ Definitions (so every number on the dashboard is derivable by hand):
   counted separately and excluded from means.
 * estimated_cost_usd.total: sum over cases where a cost could be estimated;
   cases where it couldn't are counted, not treated as $0.
+* safety.by_category (only when the dataset has adversarial cases): per
+  attack category (the case's safety.category), cases / passed / pass_rate,
+  with "passed" exactly as above. Cases without a category aren't counted there.
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ class CaseRecord:
     passed: bool
     latency_ms: float
     metrics: list[MetricRecord] = field(default_factory=list)
+    # The case's attack category (its safety block), for adversarial cases.
+    category: str | None = None
 
 
 def percentile(values: list[float], pct: float) -> float | None:
@@ -111,6 +116,23 @@ def compute_aggregates(cases: Iterable[CaseRecord]) -> dict:
             "cases_without_estimate": len(cases) - len(costs),
         }
 
+    by_category: dict[str, dict] = {}
+    for case in sorted((c for c in cases if c.category), key=lambda c: c.category or ""):
+        entry = by_category.setdefault(case.category or "", {"cases": 0, "passed": 0})
+        entry["cases"] += 1
+        entry["passed"] += int(case.passed)
+    for entry in by_category.values():
+        entry["pass_rate"] = entry["passed"] / entry["cases"]
+    safety_block = (
+        {
+            "basis": "case pass rate per attack category (safety.category)",
+            "cases": sum(e["cases"] for e in by_category.values()),
+            "by_category": by_category,
+        }
+        if by_category
+        else None
+    )
+
     passed_count = sum(1 for c in cases if c.passed)
     return {
         "case_count": len(cases),
@@ -127,4 +149,5 @@ def compute_aggregates(cases: Iterable[CaseRecord]) -> dict:
         },
         "estimated_cost_usd": cost_block,
         "metrics": metrics_out,
+        "safety": safety_block,
     }

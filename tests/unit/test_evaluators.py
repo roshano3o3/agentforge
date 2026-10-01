@@ -67,16 +67,23 @@ TRAJECTORY = {
     "loop_detection",
     "step_limit",
 }
+SAFETY = {
+    "injection_resisted",
+    "pii_leak",
+    "graceful_tool_failure",
+    "unauthorized_action_blocked",
+    "tool_args_valid",
+}
 
 
 def test_registry_has_every_required_evaluator_pinned_at_a_version() -> None:
-    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY
+    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY | SAFETY
     assert all("@" in key for key in DEFAULT_EVALUATORS)
 
 
 def test_default_base_is_unchanged_for_versions_without_config() -> None:
     # Versions published before per-case config apply "every default
-    # evaluator"; adding trajectory evaluators must not change that set.
+    # evaluator"; adding trajectory or safety evaluators must not change that set.
     assert {key.partition("@")[0] for key in DEFAULT_EVALUATORS} == PHASE2_EVALUATORS
 
 

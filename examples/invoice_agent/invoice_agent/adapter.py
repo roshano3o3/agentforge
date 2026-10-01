@@ -13,12 +13,18 @@ answer. Trusted local code, executed in-process by the AgentForge worker.
 No model is called, so no tokens or model name are reported (None means
 "not reported"; AgentForge never guesses them), and no step timings: the
 graph doesn't measure them, and AgentForge doesn't invent them.
+
+`scenario` (adversarial cases; agentforge_core.scenario) sets up the case's
+environment -- mock tool failures, extra fields in a tool's result, the
+session user -- and is applied to the tools and the session only. The
+planner never reads it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import cache
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -48,21 +54,20 @@ def _steps(messages: Sequence[BaseMessage]) -> tuple[list[Step], str]:
     return steps, answer
 
 
-def _run(behavior: Behavior, input_text: str) -> AdapterOutput:
-    state = _graph(behavior).invoke(
-        {"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT}
-    )
+def _run(behavior: Behavior, input_text: str, scenario: Mapping[str, Any] | None) -> AdapterOutput:
+    graph = _graph(behavior) if scenario is None else build_graph(behavior, scenario)
+    state = graph.invoke({"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT})
     steps, answer = _steps(state["messages"])
     return AdapterOutput(answer=answer, steps=steps)
 
 
-def answer(input_text: str) -> AdapterOutput:
-    return _run(BEHAVIOR, input_text)
+def answer(input_text: str, scenario: Mapping[str, Any] | None = None) -> AdapterOutput:
+    return _run(BEHAVIOR, input_text, scenario)
 
 
-def answer_v1(input_text: str) -> AdapterOutput:
-    return _run(V1, input_text)
+def answer_v1(input_text: str, scenario: Mapping[str, Any] | None = None) -> AdapterOutput:
+    return _run(V1, input_text, scenario)
 
 
-def answer_v2(input_text: str) -> AdapterOutput:
-    return _run(V2, input_text)
+def answer_v2(input_text: str, scenario: Mapping[str, Any] | None = None) -> AdapterOutput:
+    return _run(V2, input_text, scenario)

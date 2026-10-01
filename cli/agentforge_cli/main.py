@@ -1,5 +1,5 @@
-"""AgentForge CLI: dataset publish/validate, evaluate, runs list/show,
-baseline set/show, compare, gate.
+"""AgentForge CLI: dataset publish/validate, adversarial generate, evaluate,
+runs list/show, baseline set/show, compare, gate.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -32,8 +32,10 @@ if sys.platform == "win32":
             except ValueError:
                 pass
 
+import yaml
 from pydantic import ValidationError
 
+from agentforge_cli import adversarial
 from agentforge_cli.dataset_io import DatasetFileError, validate_dataset_file
 from agentforge_cli.git_utils import current_commit_sha
 from agentforge_cli.release_io import (
@@ -52,8 +54,10 @@ dataset_app = typer.Typer(add_completion=False, help="Manage evaluation datasets
 runs_app = typer.Typer(add_completion=False, help="Inspect evaluation runs.")
 app.add_typer(dataset_app, name="dataset")
 baseline_app = typer.Typer(add_completion=False, help="Baselines: (application, environment) -> run.")
+adversarial_app = typer.Typer(add_completion=False, help="Adversarial (safety) test datasets.")
 app.add_typer(runs_app, name="runs")
 app.add_typer(baseline_app, name="baseline")
+app.add_typer(adversarial_app, name="adversarial")
 
 console = Console()
 
@@ -150,6 +154,63 @@ def dataset_publish(
         f"[green]Published[/green] dataset '{name}' version {version['version']} "
         f"({len(version['test_cases'])} test case(s), id={version['id']})"
     )
+    console.print(f"  content hash: {version.get('content_hash')}")
+
+
+@adversarial_app.command("generate")
+def adversarial_generate(
+    dataset: str = typer.Option(..., "--dataset", help="Base dataset name (a published version is read from the API)."),
+    out: Path = typer.Option(..., "--out", help="Where to write the generated dataset YAML."),
+    profile: Path = typer.Option(..., "--profile", help="The application's attack-surface profile (YAML)."),
+    seed: int = typer.Option(7, "--seed", help="Same base content + profile + seed = identical output."),
+    per_category: int = typer.Option(5, "--per-category", min=1, help="Variants per attack category (at most)."),
+    name: str | None = typer.Option(None, "--name", help="Generated dataset's name. Default: <dataset>-safety."),
+    dataset_version: str = typer.Option("latest", "--dataset-version", help="Base version number, or 'latest'."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+) -> None:
+    """Generate tagged attack variants of a published dataset, as a new dataset file.
+
+    Seven categories: injection_direct, injection_indirect, poisoned_context,
+    malformed_tool_args, tool_failure, pii_probe, unauthorized_tool. Each
+    variant records its category and source case. Publish the file with
+    `agentforge dataset publish` to version and hash it like any other dataset.
+    """
+    try:
+        raw_profile = yaml.safe_load(profile.read_text(encoding="utf-8"))
+        profile_data = adversarial.validate_profile(raw_profile)
+    except (OSError, yaml.YAMLError, adversarial.ProfileError) as exc:
+        console.print(f"[red]Invalid profile:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=1) from None
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            base = client.get_dataset_version(dataset, dataset_version)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not read dataset '{dataset}':[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    generated = adversarial.generate(
+        dataset,
+        base["content_hash"],
+        base["test_cases"],
+        profile_data,
+        seed=seed,
+        per_category=per_category,
+        name=name or f"{dataset}-safety",
+        profile_label=profile.as_posix(),
+    )
+    # LF on every OS, so the committed file is byte-identical wherever it's generated.
+    out.write_bytes(generated.to_yaml().encode("utf-8"))
+    try:
+        _name, _desc, cases, defaults = validate_dataset_file(out)
+    except DatasetFileError as exc:  # a generator bug, not a user error
+        console.print(f"[red]Generated file failed validation:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"Wrote {out}: {len(cases)} variant(s) of '{dataset}' v{base['version']} ({base['content_hash']}), seed {seed}"
+    )
+    for line in generated.header[4:5]:
+        console.print(f"  {line}")
+    content_hash = adversarial.base_hash_of(defaults, [c.model_dump() for c in cases])
+    console.print(f"  content hash once published: {content_hash}")
 
 
 @app.command()
@@ -312,6 +373,14 @@ def _print_run(run: dict[str, Any]) -> None:
                 f"estimated cost (ESTIMATED from config/pricing.yaml): {_fmt(cost['total'], '.6f', ' USD')} "
                 f"over {cost['cases_with_estimate']} case(s); {cost['cases_without_estimate']} without an estimate"
             )
+        safety = agg.get("safety")
+        if safety:
+            by_cat = Table(title=f"Safety: pass rate per attack category ({safety['cases']} adversarial case(s))")
+            for col in ("Category", "Cases", "Passed", "Pass rate"):
+                by_cat.add_column(col)
+            for category, c in safety["by_category"].items():
+                by_cat.add_row(category, str(c["cases"]), str(c["passed"]), _fmt(c["pass_rate"], ".0%"))
+            console.print(by_cat)
         means = Table(title="Per-metric means")
         means.add_column("Evaluator")
         means.add_column("Mean score")
@@ -338,6 +407,8 @@ def _print_run(run: dict[str, Any]) -> None:
         f"provider={run['provider_type']}  dataset={run['dataset_name']} v{run['dataset_version']}  "
         f"commit={run.get('git_commit_sha') or '(none)'}"
     )
+    if run.get("dataset_content_hash"):
+        console.print(f"dataset content hash: {run['dataset_content_hash']}")
 
 
 @runs_app.command("list")

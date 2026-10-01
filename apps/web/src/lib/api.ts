@@ -11,6 +11,8 @@ import type {
   RegressionReport,
   ReleaseDecision,
   RunCreateInput,
+  SafetyBlock,
+  Scenario,
   TrajectoryExpectations,
 } from "./types";
 
@@ -136,6 +138,8 @@ export interface TestCaseInput {
   tags: string[];
   evaluators: EvaluatorConfig | null;
   trajectory: TrajectoryExpectations | null;
+  scenario: Scenario | null;
+  safety: SafetyBlock | null;
 }
 
 /** Creates a new DRAFT version (optionally pre-populated). Does not publish it. */

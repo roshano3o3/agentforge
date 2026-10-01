@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from agentforge_api.models.application import Application, ApplicationVersion
-from agentforge_api.models.dataset import Dataset, DatasetVersion, TestCase
+from agentforge_api.models.dataset import Dataset, DatasetVersion, TestCase, content_hash_of
 from agentforge_api.models.evaluation import (
     TERMINAL_STATUSES,
     EvaluationResult,
@@ -90,6 +90,7 @@ def case_records(results: list[EvaluationResult]) -> list[CaseRecord]:
                 )
                 for m in r.metrics
             ],
+            category=(r.test_case.safety or {}).get("category"),
         )
         for r in results
     ]
@@ -165,6 +166,9 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
     """`run` must have been loaded with results (see load_run)."""
     summary = await to_summary(session, run)
     results = sorted(run.results, key=lambda r: r.test_case.case_key)
+    dataset_version = await session.get(DatasetVersion, run.dataset_version_id)
+    assert dataset_version is not None
+    all_cases = list(await session.scalars(select(TestCase).where(TestCase.dataset_version_id == dataset_version.id)))
     return EvaluationRunOut(
         **summary.model_dump(),
         application_id=run.application_id,
@@ -177,6 +181,8 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
         max_latency_ms=run.max_latency_ms,
         timeout_seconds=run.timeout_seconds,
         git_commit_sha=run.git_commit_sha,
+        # Runs only target published (frozen) versions, so this is that version's hash.
+        dataset_content_hash=content_hash_of(dataset_version.default_evaluators, all_cases),
         results=[
             EvaluationResultOut(
                 id=r.id,
@@ -202,6 +208,7 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
                 ],
                 trajectory=r.test_case.trajectory,
                 steps=[AgentStepOut.model_validate(s) for s in sorted(r.steps, key=lambda s: s.step_index)],
+                safety=r.test_case.safety,
             )
             for r in results
         ],

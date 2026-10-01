@@ -127,6 +127,7 @@ def _eval_input(tc: TestCase, outcome: CaseOutcome) -> EvalInput:
             for i, s in enumerate(out.steps, start=1)
         ),
         trajectory=tc.trajectory,
+        safety=tc.safety,
     )
 
 
@@ -275,7 +276,7 @@ async def execute_run(
         )
         try:
             for tc in started["cases"]:
-                outcome = await invoke(adapter, tc.input, tc.case_key, started["timeout"])
+                outcome = await invoke(adapter, tc.input, tc.case_key, started["timeout"], tc.scenario)
                 scored = (
                     score_case(
                         case_evaluators(pinned, started["default_evaluators"], tc), _eval_input(tc, outcome), config

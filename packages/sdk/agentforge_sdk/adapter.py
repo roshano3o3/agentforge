@@ -31,6 +31,16 @@ Both kinds get the same per-case timeout and exception capture: a case that
 raises, times out, or returns a malformed output is recorded as an error
 result and the run continues.
 
+**Scenarios** (adversarial cases): a case may carry a `scenario` describing
+its environment -- mock tool failures, text merged into a tool's result, the
+session user's permissions (format: agentforge_core.scenario). A python
+adapter receives it as a `scenario` keyword argument *if it declares one*
+(`def answer(input_text, scenario=None)`); a case with a scenario sent to an
+adapter that doesn't declare it is recorded as an error, never run without
+its setup. An http adapter gets it as a `"scenario"` field in the request
+body, only when the case has one. It describes the environment only: the
+case's attack category and expectations are never sent.
+
 This module is deliberately plain dataclasses: no server, DB, or framework
 imports, so any application can depend on it.
 """
@@ -87,6 +97,7 @@ class AdapterOutput:
 
 
 class Adapter(Protocol):
-    """Callable an example/target application implements."""
+    """Callable an example/target application implements. Declaring a
+    `scenario` parameter is optional; only adversarial cases need it."""
 
     def __call__(self, input_text: str) -> AdapterOutput: ...

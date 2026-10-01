@@ -40,6 +40,12 @@ export interface RunAggregates {
     cases_without_estimate: number;
   } | null;
   metrics: Record<string, MetricAggregate>;
+  // Per attack category, for datasets with adversarial cases (Phase 5).
+  safety?: {
+    basis: string;
+    cases: number;
+    by_category: Record<string, { cases: number; passed: number; pass_rate: number }>;
+  } | null;
 }
 
 export interface EvaluationRunSummary {
@@ -90,6 +96,10 @@ export interface AgentStep {
 
 // A test case's trajectory expectations (see docs/evaluators.md).
 export type TrajectoryExpectations = Record<string, unknown>;
+// Adversarial cases: the environment setup sent to the adapter, and the
+// safety block (category, source case, expectations) only evaluators read.
+export type Scenario = Record<string, unknown>;
+export type SafetyBlock = { category: string; source_case?: string; technique?: string } & Record<string, unknown>;
 
 export interface EvaluationResult {
   id: string;
@@ -112,6 +122,7 @@ export interface EvaluationResult {
   metrics: MetricScore[];
   trajectory: TrajectoryExpectations | null;
   steps: AgentStep[];
+  safety?: SafetyBlock | null;
 }
 
 export interface EvaluationRun extends EvaluationRunSummary {
@@ -125,6 +136,7 @@ export interface EvaluationRun extends EvaluationRunSummary {
   max_latency_ms: number | null;
   timeout_seconds: number | null;
   git_commit_sha: string | null;
+  dataset_content_hash?: string | null;
   results: EvaluationResult[];
 }
 
@@ -132,7 +144,7 @@ export interface Evaluator {
   name: string;
   version: string;
   key: string;
-  kind: "quality" | "measurement" | "trajectory";
+  kind: "quality" | "measurement" | "trajectory" | "safety";
   description: string;
 }
 
@@ -182,6 +194,8 @@ export interface TestCase {
   tags: string[];
   evaluators: EvaluatorConfig | null;
   trajectory: TrajectoryExpectations | null;
+  scenario?: Scenario | null;
+  safety?: SafetyBlock | null;
   // Read-only legacy fields on versions published before per-case config.
   expected_answer_contains: string[];
   expected_answer_regex: string | null;
@@ -197,6 +211,7 @@ export interface DatasetVersion {
   created_at: string;
   published_at: string | null;
   default_evaluators: EvaluatorConfig | null;
+  content_hash?: string | null;
   test_cases: TestCase[];
 }
 

@@ -16,6 +16,7 @@ from agentforge_evaluators.heuristic_context_precision import (
 from agentforge_evaluators.pricing import ModelPrice, PricingConfigError, parse_pricing
 from agentforge_evaluators.registry import (
     DEFAULT_EVALUATORS,
+    SAFETY_EVALUATORS,
     TRAJECTORY_EVALUATORS,
     UnknownEvaluatorError,
     list_evaluators,
@@ -31,9 +32,15 @@ from agentforge_evaluators.release import (
     evaluate_policy,
     parse_policy,
 )
+from agentforge_evaluators.safety import ATTACK_CATEGORIES, SAFETY_KEYS, SafetyConfigError, validate_safety
 from agentforge_evaluators.trajectory import TRAJECTORY_KEYS, TrajectoryConfigError, validate_trajectory
 
 __all__ = [
+    "ATTACK_CATEGORIES",
+    "SAFETY_EVALUATORS",
+    "SAFETY_KEYS",
+    "SafetyConfigError",
+    "validate_safety",
     "CaseOutcome",
     "Policy",
     "PolicyError",

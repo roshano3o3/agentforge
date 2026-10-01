@@ -13,8 +13,10 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - DB: Postgres via Docker Compose; SQLite via `aiosqlite` is a fallback that can't execute runs
 - Web: Next.js dashboard — `apps/web` (Playwright e2e in `apps/web/e2e`)
 - CLI: Typer (`agentforge`) — `cli/`; shared Pydantic schemas — `packages/core`
-- Evaluators: `packages/evaluators` — `name@version` registry, 16 deterministic evaluators (9 answer/
-  retrieval/measurement + 7 trajectory in `trajectory.py`), aggregates; one dep: `jsonschema`
+- Evaluators: `packages/evaluators` — `name@version` registry, 21 deterministic evaluators (9 answer/
+  retrieval/measurement + 7 trajectory in `trajectory.py` + 5 safety in `safety.py`), aggregates; one dep: `jsonschema`
+- Adversarial generator: `cli/agentforge_cli/adversarial.py` (pure; `agentforge adversarial generate`), profile
+  `examples/invoice_agent/adversarial_profile.yaml`, output `datasets/invoice_agent_safety_v1.yaml` (35 variants)
 - SDK: `packages/sdk` (adapter contract: python `module:fn` + http, optional `steps` trajectory);
   pricing: `config/pricing.yaml`
 - Example apps: `examples/rag_app` (synthetic "Northwind Outfitters"; also `fault_injection`,
@@ -37,6 +39,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   Only the worker writes results; there is no client route for it. Agent steps (`agent_steps`) and a
   case's `trajectory` expectations are frozen the same way.
 - Trajectories are only what the adapter reports. Never infer, fill in, or time steps on its behalf.
+- A case's `safety` block (category, expectations) never reaches the adapter; only `scenario` does. Never put
+  attack metadata in a scenario (a test asserts it).
+- Never tune the example agent or the sample to a number: the seed (7) and v2's settings were fixed before running.
 
 ## Windows notes
 - Use the PowerShell scripts in `scripts/`: `setup.ps1`, `docker-up.ps1`/`docker-down.ps1`,
@@ -52,7 +57,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-01)
+## Current status (2026-10-01, Phase 5A)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -88,6 +93,15 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   Tests: Playwright 6 (local + CI).
 - Playwright sets FORCE_COLOR on GitHub Actions; Rich then emits ANSI even through a pipe. e2e specs that
   regex CLI output must drop FORCE_COLOR / set NO_COLOR (see regression-flow.spec.ts).
+- **Phase 5 part A done on branch `phase5-safety`, awaiting review** (2026-10-01): `test_cases.scenario` + `.safety`
+  (migration `a5d81c3f9e27`), dataset `content_hash` (computed, published only; `agentforge_core.hashing`), worker
+  passes `scenario` (python kwarg / http field; adapter without it -> error result), 5 safety evaluators, per-category
+  aggregates (`aggregates.safety.by_category`), generator, invoice agent defenses D1-D5 (v2 lacks D1-D3). Docker runs:
+  v1 35/35; v2 15/35 (injection_direct 2/5, indirect 0/5, poisoned 1/5, malformed 5/5, tool_failure 2/5, pii 5/5,
+  unauthorized 0/5). Offline over all 226 eligible variants v1 still fails 15 (keyword-intent hijack, `$0` refund).
+  Tests: SQLite 236 + 17 skipped; Postgres 253; Playwright 6. Regenerating the committed dataset must stay byte-identical.
+- The new-run form shows one checkbox per registered evaluator: adding one changes run-flow.spec.ts's count.
+- Writing big Python patches through a bash heredoc breaks on quotes/`\n`: write the script to the scratchpad instead.
 - Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
   (tags, metric names like `newly_failing[tag=critical]`, error messages).
 
@@ -97,7 +111,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 3. Agent trajectory evaluation, LangGraph example agent — **done**
 4. Regression engine, release policy, CI gate (`agentforge gate`) — **done** (A: backend + CLI;
    B: gate workflow, Regression/Baselines pages, demo PRs #2 (v1, PASSED) and #3 (v2, FAILED) left open)
-5. Safety / adversarial testing
+5. Safety / adversarial testing — part A (generator, safety evaluators, per-category results) **done**, in review;
+   part B: safety metrics in the release policy/gate, dashboard view
 6. OpenTelemetry tracing, Trace Explorer
 7. Failure replay
 Then: remaining dashboard pages, reproducible benchmark.

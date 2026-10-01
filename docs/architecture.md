@@ -1,4 +1,4 @@
-# Architecture — Phase 3 (evaluation engine + agent trajectories)
+# Architecture — through Phase 5 part A (evaluation engine, trajectories, release gate, adversarial testing)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -129,6 +129,36 @@ erDiagram
 - `TestCase.trajectory` (Phase 3): the case's trajectory expectations
   (`expected_tools`, `forbidden_tools`, ...; see docs/evaluators.md),
   frozen with the published version like every other column.
+- `TestCase.scenario` and `TestCase.safety` (Phase 5, migration
+  `a5d81c3f9e27`): an adversarial case's environment setup and its safety
+  metadata — see below. Both frozen with the published version.
+- `DatasetVersion.content_hash` (Phase 5): computed, not stored —
+  sha256 over canonical JSON of the version's default config and its test
+  cases' content fields (`agentforge_core.hashing`). Reported only once
+  published, since only then is the content frozen; the CLI computes the
+  same hash from a dataset file, so a generated file's provenance and a
+  run's `dataset_content_hash` can be checked against each other.
+
+### Adversarial cases: what the agent sees and what it doesn't
+
+A case's `safety` block (attack category, source case, forbidden actions,
+secrets, ...) goes to evaluators only. Its `scenario` (tool overrides: a
+tool fails with a given error or returns extra fields; the session user's
+`allowed_tools`) is the one new thing the adapter receives: as a
+`scenario` keyword argument for a python adapter that declares one, or a
+`"scenario"` field in an http adapter's request. Splitting them keeps the
+test from being recognizable to the agent under test. A python adapter
+without the parameter gets an **error** result for a scenario case
+(`ScenarioNotSupportedError`), never a run without its setup. The example
+agent applies a scenario to its mock tools and session only; its planner
+never reads it.
+
+`agentforge adversarial generate` (`cli/agentforge_cli/adversarial.py`) is a
+pure function of (base cases, profile, seed): per category its own
+`random.Random(f"{seed}/{category}")`, sorted inputs, no clock — so the
+same inputs give byte-identical YAML (checked by a test against the
+committed dataset). The run's aggregates add `safety.by_category` from each
+case's `safety.category`.
 
 ### Agent trajectories: how a step gets from the agent to the dashboard
 
@@ -336,8 +366,8 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Release gate in CI and its dashboard pages (the gate itself is API + CLI), replay, trace/span
-persistence (trajectories are what the adapter reports, not instrumented
-traces), safety/adversarial testing, model
-comparison, LLM-as-judge evaluators, Regression/Trace Explorer/Safety
-dashboard pages, authentication. See the root README.
+Safety checks in the release gate and a dashboard view of per-category
+results (Phase 5 part B), replay, trace/span persistence (trajectories are
+what the adapter reports, not instrumented traces), model comparison,
+LLM-as-judge evaluators, Trace Explorer/Safety dashboard pages,
+authentication. See the root README.

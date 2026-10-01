@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agentforge_api.db.base import Base
 from agentforge_api.models._shared import new_id, utcnow
+from agentforge_core.hashing import dataset_content_hash
 
 
 class DatasetVersionStatus(str, enum.Enum):
@@ -62,6 +63,15 @@ class DatasetVersion(Base):
     dataset: Mapped[Dataset] = relationship(back_populates="versions")
     test_cases: Mapped[list[TestCase]] = relationship(back_populates="dataset_version", cascade="all, delete-orphan")
 
+    @property
+    def content_hash(self) -> str | None:
+        """sha256 of the frozen content (agentforge_core.hashing), for a
+        published version only. Computed, not stored: the content it hashes
+        can't change once published. Needs `test_cases` loaded."""
+        if self.status != DatasetVersionStatus.published:
+            return None
+        return content_hash_of(self.default_evaluators, self.test_cases)
+
 
 class TestCase(Base):
     """Mutable while the parent DatasetVersion is a draft; frozen once it's
@@ -91,5 +101,33 @@ class TestCase(Base):
     # them into `evaluators`.
     expected_answer_contains: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     expected_answer_regex: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Adversarial cases (Phase 5). `scenario`: the environment setup the
+    # adapter receives (agentforge_core.scenario). `safety`: attack category,
+    # source case and the safety evaluators' expectations -- never sent to the
+    # adapter (agentforge_evaluators.safety). NULL for ordinary cases.
+    scenario: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    safety: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     dataset_version: Mapped[DatasetVersion] = relationship(back_populates="test_cases")
+
+
+def content_hash_of(default_evaluators: dict | None, cases: list[TestCase]) -> str:
+    return dataset_content_hash(
+        default_evaluators,
+        [
+            {
+                "case_key": c.case_key,
+                "input": c.input,
+                "expected_answer": c.expected_answer,
+                "expected_context": c.expected_context,
+                "tags": c.tags,
+                "evaluators": c.evaluators,
+                "trajectory": c.trajectory,
+                "scenario": c.scenario,
+                "safety": c.safety,
+                "expected_answer_contains": c.expected_answer_contains,
+                "expected_answer_regex": c.expected_answer_regex,
+            }
+            for c in cases
+        ],
+    )

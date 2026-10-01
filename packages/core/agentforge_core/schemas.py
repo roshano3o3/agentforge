@@ -105,6 +105,14 @@ EvaluatorConfigIn = dict[str, Any]
 # A test case's trajectory expectations; see
 # packages/evaluators/agentforge_evaluators/trajectory.py for the keys.
 TrajectoryIn = dict[str, Any]
+# How the application's environment is set up for one case (mock tool
+# failures, injected tool output, the session user); the only part of a case
+# besides its input that the adapter receives. See agentforge_core.scenario.
+ScenarioIn = dict[str, Any]
+# Safety-test metadata and expectations (attack category, source case,
+# forbidden actions, secrets, ...). Evaluators only; never sent to the
+# adapter. See packages/evaluators/agentforge_evaluators/safety.py.
+SafetyIn = dict[str, Any]
 
 
 class TestCaseIn(BaseModel):
@@ -123,6 +131,10 @@ class TestCaseIn(BaseModel):
     # expected_sequence, ...). Validated by the API and the CLI against
     # agentforge_evaluators.validate_trajectory.
     trajectory: TrajectoryIn | None = None
+    # Adversarial cases (Phase 5): the environment setup sent to the adapter,
+    # and the safety block only evaluators read. Both validated by the API and the CLI.
+    scenario: ScenarioIn | None = None
+    safety: SafetyIn | None = None
 
     @field_validator("expected_context", "tags")
     @classmethod
@@ -168,6 +180,8 @@ class TestCaseOut(BaseModel):
     tags: list[str]
     evaluators: EvaluatorConfigIn | None
     trajectory: TrajectoryIn | None
+    scenario: ScenarioIn | None = None
+    safety: SafetyIn | None = None
     # Read-only legacy fields from Phase 2 datasets (published before per-case
     # config existed). The worker still honors them for those versions; new
     # data can't set them -- use `evaluators` instead.
@@ -185,6 +199,9 @@ class DatasetVersionOut(BaseModel):
     created_at: datetime
     published_at: datetime | None
     default_evaluators: EvaluatorConfigIn | None
+    # sha256 of the version's content (agentforge_core.hashing); set only once
+    # published, since a draft's content can still change.
+    content_hash: str | None = None
     test_cases: list[TestCaseOut]
 
     model_config = {"from_attributes": True}
@@ -283,6 +300,8 @@ class EvaluationResultOut(BaseModel):
     # the steps the agent reported, in order. Empty for non-agent cases.
     trajectory: TrajectoryIn | None = None
     steps: list[AgentStepOut] = Field(default_factory=list)
+    # The case's safety block (attack category, source case, ...), if any.
+    safety: SafetyIn | None = None
 
 
 class RunProgress(BaseModel):
@@ -323,6 +342,8 @@ class EvaluationRunOut(EvaluationRunSummaryOut):
     max_latency_ms: float | None
     timeout_seconds: float | None
     git_commit_sha: str | None
+    # Content hash of the (published, frozen) dataset version this run used.
+    dataset_content_hash: str | None = None
     results: list[EvaluationResultOut] = Field(default_factory=list)
 
 

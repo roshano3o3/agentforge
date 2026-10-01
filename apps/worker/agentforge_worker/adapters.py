@@ -13,6 +13,13 @@ in the background until it returns (or the worker process exits). Each case
 gets a fresh thread, so one hung case never delays the next case's timer.
 An async adapter is cancelled properly on timeout -- unless it blocks the
 event loop with synchronous code, which nothing can interrupt.
+
+A case's `scenario` (mock tool failures, injected tool output, the session
+user; agentforge_core.scenario) is delivered as the `scenario` keyword
+argument to a python adapter that declares one, and as a "scenario" field
+in an http adapter's request body. A python adapter that doesn't declare it
+can't run such a case: the case is recorded as an error rather than run
+without its setup, which would quietly test something else.
 """
 
 from __future__ import annotations
@@ -44,6 +51,10 @@ class AdapterLoadError(Exception):
 
 class AdapterOutputError(Exception):
     """The adapter returned something that isn't a valid AdapterOutput."""
+
+
+class ScenarioNotSupportedError(Exception):
+    """The case has a scenario, but the python adapter takes no `scenario` argument."""
 
 
 @dataclass
@@ -174,7 +185,7 @@ def _describe(exc: BaseException) -> tuple[str, str]:
     return error_type, detail
 
 
-def _call_in_daemon_thread(fn: Callable[[str], Any], input_text: str) -> concurrent.futures.Future:
+def _call_in_daemon_thread(fn: Callable[[], Any]) -> concurrent.futures.Future:
     future: concurrent.futures.Future = concurrent.futures.Future()
 
     def target() -> None:
@@ -182,7 +193,7 @@ def _call_in_daemon_thread(fn: Callable[[str], Any], input_text: str) -> concurr
         error: BaseException | None = None
         result: Any = None
         try:
-            result = fn(input_text)
+            result = fn()
         except BaseException as exc:  # noqa: BLE001 - includes SystemExit; reported, never re-raised here
             error = exc
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -211,12 +222,28 @@ class PythonAdapter:
         if fn is None or not callable(fn):
             raise AdapterLoadError(f"module '{module_path}' has no callable '{func_name}'")
         self._fn = fn
+        self._target = target
         self._is_async = inspect.iscoroutinefunction(fn)
+        try:
+            self._takes_scenario = "scenario" in inspect.signature(fn).parameters
+        except (TypeError, ValueError):  # no introspectable signature (some builtins/C callables)
+            self._takes_scenario = False
 
-    async def call(self, input_text: str, case_key: str, timeout: float) -> tuple[Any, float | None]:
+    async def call(
+        self, input_text: str, case_key: str, timeout: float, scenario: dict[str, Any] | None = None
+    ) -> tuple[Any, float | None]:
+        kwargs: dict[str, Any] = {}
+        if scenario is not None:
+            if not self._takes_scenario:
+                raise ScenarioNotSupportedError(
+                    f"this case has a scenario (keys: {sorted(scenario)}), but adapter '{self._target}' takes no "
+                    "`scenario` argument; running it without its setup would test something else"
+                )
+            kwargs["scenario"] = scenario
         if self._is_async:
-            return await asyncio.wait_for(self._fn(input_text), timeout), None
-        return await asyncio.wait_for(asyncio.wrap_future(_call_in_daemon_thread(self._fn, input_text)), timeout)
+            return await asyncio.wait_for(self._fn(input_text, **kwargs), timeout), None
+        future = _call_in_daemon_thread(lambda: self._fn(input_text, **kwargs))
+        return await asyncio.wait_for(asyncio.wrap_future(future), timeout)
 
     async def aclose(self) -> None:
         pass
@@ -227,11 +254,13 @@ class HttpAdapter:
         self._url = url
         self._client = httpx.AsyncClient()
 
-    async def call(self, input_text: str, case_key: str, timeout: float) -> tuple[Any, float | None]:
-        response = await asyncio.wait_for(
-            self._client.post(self._url, json={"input": input_text, "case_key": case_key}, timeout=timeout),
-            timeout,
-        )
+    async def call(
+        self, input_text: str, case_key: str, timeout: float, scenario: dict[str, Any] | None = None
+    ) -> tuple[Any, float | None]:
+        body: dict[str, Any] = {"input": input_text, "case_key": case_key}
+        if scenario is not None:
+            body["scenario"] = scenario
+        response = await asyncio.wait_for(self._client.post(self._url, json=body, timeout=timeout), timeout)
         if response.status_code // 100 != 2:
             raise AdapterOutputError(f"HTTP adapter returned {response.status_code}: {response.text[:500]}")
         try:
@@ -251,14 +280,20 @@ def build_adapter(adapter_type: str | None, target: str | None) -> PythonAdapter
     raise AdapterLoadError(f"unsupported adapter: type={adapter_type!r} target={target!r}")
 
 
-async def invoke(adapter: PythonAdapter | HttpAdapter, input_text: str, case_key: str, timeout: float) -> CaseOutcome:
+async def invoke(
+    adapter: PythonAdapter | HttpAdapter,
+    input_text: str,
+    case_key: str,
+    timeout: float,
+    scenario: dict[str, Any] | None = None,
+) -> CaseOutcome:
     start = time.perf_counter()
 
     def elapsed() -> float:
         return (time.perf_counter() - start) * 1000
 
     try:
-        raw, measured_ms = await adapter.call(input_text, case_key, timeout)
+        raw, measured_ms = await adapter.call(input_text, case_key, timeout, scenario)
         output = coerce_output(raw)
     except asyncio.CancelledError:
         raise  # the worker itself is being cancelled -- not the adapter's fault
