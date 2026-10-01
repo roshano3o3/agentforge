@@ -4,7 +4,7 @@
 
 Production evaluation, safety testing, observability, and release gating for AI agents — a real, working system, not a metrics-dashboard demo.
 
-**This is Phase 3 of a multi-phase build: the evaluation engine plus agent trajectory evaluation.** Runs are submitted through the API (from the CLI or the dashboard), queued in Redis, and executed by an [arq](https://arq-docs.helpmanual.io/) worker that runs **only inside a Linux Docker container**. The worker calls the application's adapter for every test case of a *published* dataset version (with a per-case timeout and full exception capture), scores each case with a registry of versioned deterministic evaluators, and stores results, reasons, evidence and run-level aggregates. For agents, it also stores every step the agent reports (tool name, args, result or error) and checks that trajectory against the case's declared expectations — see [Trajectory evaluation](#trajectory-evaluation). Finished runs are immutable, enforced in the service layer and by Postgres triggers. There is still no release gate, no safety testing, no tracing, no LLM-as-judge, and no authentication — see [Current limitations](#current-limitations).
+**This is Phase 4 of a multi-phase build: the evaluation engine, agent trajectory evaluation, and a release gate that runs on every pull request.** Runs are submitted through the API (from the CLI or the dashboard), queued in Redis, and executed by an [arq](https://arq-docs.helpmanual.io/) worker that runs **only inside a Linux Docker container**. The worker calls the application's adapter for every test case of a *published* dataset version (with a per-case timeout and full exception capture), scores each case with a registry of versioned deterministic evaluators, and stores results, reasons, evidence and run-level aggregates. For agents, it also stores every step the agent reports (tool name, args, result or error) and checks that trajectory against the case's declared expectations — see [Trajectory evaluation](#trajectory-evaluation). Finished runs are immutable, enforced in the service layer and by Postgres triggers. There is still no safety testing, no tracing, no LLM-as-judge, and no authentication — see [Current limitations](#current-limitations).
 
 ## What actually exists right now
 
@@ -19,8 +19,8 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - **Aggregates**, stored on the run when it finishes: pass rate, per-metric means and pass rates, P50/P95 latency (nearest-rank, ok cases only), and total **estimated** cost (adapter-reported tokens × rates from [`config/pricing.yaml`](config/pricing.yaml), which ships with no vendor prices).
 - **Labels:** every result of a `local-deterministic` run is labeled **fixture-based** (CLI, API, dashboard) — it comes from a synthetic app and deterministic heuristics, not a real model.
 - **CLI** (`agentforge evaluate`) submits a run through the API and polls until it finishes; nothing executes in the CLI process.
-- **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. For agent cases, a **trajectory timeline**: every step in order (number, kind, tool, args, result or error), the steps a failed evaluator blamed in red with its reason beside them, failures not tied to one step listed under the timeline, and long args/results collapsed behind "show more". Loading, empty, error, pending, running and failed states are all real. Regression / Trace Explorer / Safety are still disabled nav links, because none of them exists yet.
-- **Release gate** (Phase 4 part A): baselines, regression reports and `agentforge gate` — see [Release gate](#release-gate-phase-4-part-a-backend--cli).
+- **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. For agent cases, a **trajectory timeline**: every step in order (number, kind, tool, args, result or error), the steps a failed evaluator blamed in red with its reason beside them, failures not tied to one step listed under the timeline, and long args/results collapsed behind "show more". Loading, empty, error, pending, running and failed states are all real. **Regression** (run-vs-run deltas with direction-aware markers, case classes, and the stored release decision's checks) and **Baselines** (the current pointer per environment). Trace Explorer / Safety are still disabled nav links, because neither exists yet.
+- **Release gate** (Phase 4): baselines, regression reports, `agentforge gate`, and a GitHub Actions workflow that gates every pull request — see [Release gate](#release-gate) and [Release gate in CI](#release-gate-in-ci-real-pull-requests).
 - **Tests:** 211 automated — 207 Python (unit per evaluator, config rule and step-parsing rule; integration run lifecycle incl. timing-out and crashing cases; per-case config; the invoice agent's v1 and v2 runs end to end; raw-SQL trigger tests; CLI → API → Redis → Docker worker end-to-end) and 4 Playwright browser tests (two start runs from the UI; the trajectory ones open a v1 and a v2 case and check the highlighted step and its reason). See [Testing](#testing).
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml), every push and pull request), three jobs: **lint** (ruff check, ruff format --check, mypy, eslint, tsc); **python** (the suite against Postgres + Redis service containers with the worker as a container, then again on SQLite); **browser** (Playwright + Chromium against Postgres + Redis with the worker as a container).
 
@@ -167,7 +167,7 @@ In the dashboard, the v2 run's `refund-over-limit-001` (from the Playwright run)
 
 and the same request under v1, nothing flagged: [`trajectory-v1-passing.png`](docs/screenshots/trajectory-v1-passing.png) (`refund-small-001`).
 
-## Release gate (Phase 4, part A: backend + CLI)
+## Release gate
 
 A **baseline** is a pointer — (application, environment) → one completed run. Setting it changes that pointer and nothing else; no result is copied. `agentforge baseline set <run_id> --env production`, `agentforge baseline show`.
 
@@ -220,7 +220,26 @@ Cases: newly failing 6, fixed 0, still failing 0, still passing 4
 RELEASE GATE: FAILED                                                                            (exit 1)
 ```
 
-(Table borders and header trimmed; the full output also lists each newly failing case with its tags and failed evaluators.) Not yet built: the dashboard pages for baselines and decisions, and a CI workflow that runs the gate (Phase 4 part B).
+(Table borders and header trimmed; the full output also lists each newly failing case with its tags and failed evaluators.) The dashboard's **Regression** and **Baselines** pages show the same comparison and decision: [`regression-v1-vs-v2.png`](docs/screenshots/regression-v1-vs-v2.png), [`baselines.png`](docs/screenshots/baselines.png).
+
+### Release gate in CI (real pull requests)
+
+[`.github/workflows/agentforge-gate.yml`](.github/workflows/agentforge-gate.yml) runs on every pull request. In one job, with Postgres and Redis service containers, it evaluates the example invoice agent **as the base branch has it** (set as the `production` baseline) and **as the PR has it** (the candidate), runs `agentforge gate` with the **base branch's** `agentforge.yaml` policy (so a PR can't loosen the policy that judges it), posts the table as one PR comment that is updated on each push, and fails the check when the gate fails. Logic: [`scripts/ci-gate.sh`](scripts/ci-gate.sh). The agent's behavior is set in [`examples/invoice_agent/invoice_agent/config.py`](examples/invoice_agent/invoice_agent/config.py), so changing it is a code change the gate judges.
+
+Two demo PRs are left **open on purpose, never to be merged**, as public proof:
+
+| PR | Change | Gate | Checks passed | Case pass rate (base → PR) |
+|---|---|---|---|---|
+| [#2 demo: v1 agent](https://github.com/roshano3o3/agentforge/pull/2) | `BEHAVIOR = V1` — same settings as `main`, refactored to the named preset | **PASSED** ([run](https://github.com/roshano3o3/agentforge/actions/runs/36901101498)) | 8 of 8 | 100% → 100% (10/10) |
+| [#3 demo: v2 agent](https://github.com/roshano3o3/agentforge/pull/3) | `BEHAVIOR = V2` — five deliberate regressions (refunds under $100 skip approval, a denied approval is accepted, amounts as strings, retried lookups, delete instead of void) | **FAILED** ([run](https://github.com/roshano3o3/agentforge/actions/runs/36901106195)) | 3 of 8 | 100% → 40% (4/10) |
+
+On #3 the gate failed five checks: `pass_rate` minimum (0.4 < 0.9) and regression (drop 0.6 > 0.02), `approval_required.pass_rate` (1 → 0), `tool_selection.mean_score` (1 → 0.78, drop 0.22 > 0.05), and `newly_failing[tag=critical]` (3: `refund-over-limit-001`, `refund-small-001`, `void-duplicate-001`); 6 cases newly failing in all. Error rate and P95 latency passed.
+
+![The failed release gate check on PR #3](docs/screenshots/ci-gate-pr3-failed-check.png)
+
+The comment the workflow posted on #3 ([live](https://github.com/roshano3o3/agentforge/pull/3#issuecomment-5937056011)): [`ci-gate-pr3-comment.png`](docs/screenshots/ci-gate-pr3-comment.png).
+
+> **What these numbers are.** The invoice agent is a real LangGraph graph (StateGraph + ToolNode, real tool calls and tool errors), but its **planner is scripted, deterministic Python, not an LLM**. No model is called anywhere in these runs. The pass rates and scores are **fixture-based**: they measure this example agent against the 10-case [`datasets/invoice_agent_v1.yaml`](datasets/invoice_agent_v1.yaml), and the v2 regressions were written on purpose. They demonstrate the gate's mechanics, not any model's quality. Latency is the real wall-clock time of the scripted agent on a GitHub runner (milliseconds).
 
 ## Dataset version lifecycle
 
@@ -304,7 +323,7 @@ Read this before assuming a feature exists.
 - **All evaluators are deterministic string/ID heuristics.** No LLM-as-judge, no semantic similarity, no RAGAS. `heuristic_context_*` are ID-overlap heuristics, not the RAGAS metrics of similar names.
 - **Token counts and model names are only what the adapter reports**; cost is only an estimate, and only for models listed in `config/pricing.yaml` (which ships with none but the $0 fixture).
 - **Case pass/fail is strict**: any failing evaluator fails the case; there is no per-evaluator weighting. The release gate's checks are over run-level aggregates and case verdicts only.
-- **The release gate has no dashboard page or CI workflow yet** (Phase 4 part B); it's API + CLI. Baselines are one pointer per (application, environment) with no history of earlier pointers (each `ReleaseDecision` records the baseline run it used). Regression comparison requires the same dataset version: re-publishing a dataset means re-running the baseline.
+- **The CI gate evaluates one example agent** (the invoice agent, fixture-based). Pointing it at your own agent means editing `scripts/ci-gate.sh`; there is no reusable GitHub Action yet. Baselines are one pointer per (application, environment) with no history of earlier pointers (each `ReleaseDecision` records the baseline run it used). Regression comparison requires the same dataset version: re-publishing a dataset means re-running the baseline.
 - **No-Docker (SQLite) mode can't execute runs** (see Quick start). The SQLite path remains for the API, datasets, and the in-process test suite.
 - **Docker Compose and the PowerShell scripts are exercised on one Windows machine only.** CI (Linux) runs the same tests, but with GitHub service containers and `docker run`, not Compose.
 - **Per-case config can't be edited in the dashboard yet.** The dataset page shows each version's default and per-case evaluator config; set it through the YAML file (`agentforge dataset publish`) or the API. Cases added in the UI inherit the version's defaults.
@@ -316,11 +335,11 @@ Read this before assuming a feature exists.
 - **No safety/adversarial testing or trace persistence** — later phases.
 - **A known SQLite-only quirk:** timestamps re-read from SQLite can lose their UTC-offset suffix (same instant). Postgres doesn't.
 - **A draft PATCH replaces the entire test-case set**, not a partial merge.
-- **`agentforge.yaml` (from `agentforge init`) is not read by anything yet.**
+- **`agentforge.yaml` holds two keys, `api_url` and `release_policy`** (anything else is rejected on load); it's loaded by `agentforge gate`.
 
 ## What's next
 
-Phase 4 part B (gate in CI, dashboard pages for baselines and release decisions), Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
+Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
 
 ## License
 

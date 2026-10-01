@@ -52,7 +52,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-09-30)
+## Current status (2026-10-01)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -79,6 +79,15 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   validated on load), `agentforge gate` (API computes checks; immutable `release_decisions`, migration
   `f3c7a9e2b510`; exit 0/1/2; `$GITHUB_STEP_SUMMARY`). Real gate: v1->v1 PASSED, v1->v2 FAILED.
   Tests: SQLite 190 passed + 17 skipped; Postgres 207; Playwright 4 (unchanged).
+- **Phase 4 part B done** (2026-10-01): gate workflow `.github/workflows/agentforge-gate.yml` + `scripts/ci-gate.sh`
+  (base branch's agent = production baseline, PR's agent = candidate, base branch's policy; one PR comment;
+  check fails on FAILED); Regression + Baselines pages. Demo PRs left open, never merge:
+  #2 `demo/v1-agent` (`BEHAVIOR = V1`) PASSED 8/8; #3 `demo/v2-agent` (`BEHAVIOR = V2`) FAILED 3/8, pass rate
+  1 -> 0.4, 6 newly failing (3 critical). README "Release gate in CI" + `docs/screenshots/ci-gate-pr3-*.png`.
+  PR #1 (`demo/invoice-agent-fast-paths` -> `phase4`) is stale: comment-only diff, gate PASSED.
+  Tests: Playwright 6 (local + CI).
+- Playwright sets FORCE_COLOR on GitHub Actions; Rich then emits ANSI even through a pipe. e2e specs that
+  regex CLI output must drop FORCE_COLOR / set NO_COLOR (see regression-flow.spec.ts).
 - Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
   (tags, metric names like `newly_failing[tag=critical]`, error messages).
 
@@ -86,8 +95,14 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done**
 2. Evaluation engine: evaluators, worker + queue (Docker), aggregates — **done**
 3. Agent trajectory evaluation, LangGraph example agent — **done**
-4. Regression engine, release policy, CI gate (`agentforge gate`) — part A (backend + CLI) **done**
+4. Regression engine, release policy, CI gate (`agentforge gate`) — **done** (A: backend + CLI;
+   B: gate workflow, Regression/Baselines pages, demo PRs #2 (v1, PASSED) and #3 (v2, FAILED) left open)
 5. Safety / adversarial testing
 6. OpenTelemetry tracing, Trace Explorer
 7. Failure replay
 Then: remaining dashboard pages, reproducible benchmark.
+8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
+   metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
+   screenshots, tests), K8s manifests, MCP adapter, a real model-comparison run (OpenAI / Claude /
+   optional Llama via vLLM; needs API keys, results in `benchmarks/` JSON with date + dataset hash),
+   and resume bullets generated only from measured results in the repo.
