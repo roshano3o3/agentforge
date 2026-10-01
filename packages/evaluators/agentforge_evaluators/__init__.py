@@ -21,9 +21,27 @@ from agentforge_evaluators.registry import (
     list_evaluators,
     resolve,
 )
+from agentforge_evaluators.release import (
+    CaseOutcome,
+    Policy,
+    PolicyError,
+    RegressionError,
+    RunSnapshot,
+    compare,
+    evaluate_policy,
+    parse_policy,
+)
 from agentforge_evaluators.trajectory import TRAJECTORY_KEYS, TrajectoryConfigError, validate_trajectory
 
 __all__ = [
+    "CaseOutcome",
+    "Policy",
+    "PolicyError",
+    "RegressionError",
+    "RunSnapshot",
+    "compare",
+    "evaluate_policy",
+    "parse_policy",
     "CaseRecord",
     "DEFAULT_EVALUATORS",
     "EVALUATOR_NAME",

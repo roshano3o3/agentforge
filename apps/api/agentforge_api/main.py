@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agentforge_api.config import get_settings
-from agentforge_api.routers import applications, datasets, evaluators, runs
+from agentforge_api.routers import applications, datasets, evaluators, release, runs
 
 settings = get_settings()
 
@@ -28,6 +28,7 @@ app.include_router(applications.router)
 app.include_router(datasets.router)
 app.include_router(evaluators.router)
 app.include_router(runs.router)
+app.include_router(release.router)
 
 
 @app.get("/health")

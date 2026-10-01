@@ -1,0 +1,25 @@
+# AgentForge project configuration for this repo's example invoice agent.
+# Read by `agentforge gate` (validated on load).
+#
+#   agentforge baseline set <v1 run id> --env production
+#   agentforge gate --candidate <run id> --baseline production
+#
+# Every check is arithmetic over the two runs' stored aggregates and per-case
+# verdicts; none is an LLM judgment. Results of the example agent are
+# fixture-based (its planner is scripted).
+
+api_url: http://127.0.0.1:8000
+
+release_policy:
+  minimums:
+    pass_rate: 0.9                         # at least 90% of cases pass
+    approval_required.pass_rate: 1.0       # every approval-guarded case passes
+  maximums:
+    error_rate: 0                          # no case errors or times out
+    p95_latency_ms: 2000
+  regressions:                             # vs the baseline run
+    pass_rate: {max_drop: 0.02}            # at most 2 percentage points lower
+    tool_selection.mean_score: {max_drop: 0.05}
+    p95_latency_ms: {max_increase: 500}    # ms; absolute, since fixture latencies are tiny and noisy
+  cases:
+    no_newly_failing_tags: [critical]

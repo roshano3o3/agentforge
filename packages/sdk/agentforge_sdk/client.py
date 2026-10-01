@@ -119,3 +119,33 @@ class AgentForgeClient:
         resp = self._client.get("/runs")
         _raise_for_status(resp)
         return resp.json()
+
+    # -- baselines, regression, release gate -----------------------------------
+
+    def set_baseline(self, run_id: str, environment: str) -> dict[str, Any]:
+        """Point (the run's application, environment) at a completed run."""
+        resp = self._client.put("/baselines", json={"run_id": run_id, "environment": environment})
+        _raise_for_status(resp)
+        return resp.json()
+
+    def list_baselines(self, application: str | None = None, environment: str | None = None) -> list[dict[str, Any]]:
+        params = {k: v for k, v in (("application", application), ("environment", environment)) if v is not None}
+        resp = self._client.get("/baselines", params=params)
+        _raise_for_status(resp)
+        return resp.json()
+
+    def regression(self, baseline_run_id: str, candidate_run_id: str) -> dict[str, Any]:
+        resp = self._client.get(
+            "/regression", params={"baseline_run_id": baseline_run_id, "candidate_run_id": candidate_run_id}
+        )
+        _raise_for_status(resp)
+        return resp.json()
+
+    def create_release_decision(self, candidate_run_id: str, baseline: str, policy: dict[str, Any]) -> dict[str, Any]:
+        """Run the release gate server-side; returns the persisted decision."""
+        resp = self._client.post(
+            "/release-decisions",
+            json={"candidate_run_id": candidate_run_id, "baseline": baseline, "policy": policy},
+        )
+        _raise_for_status(resp)
+        return resp.json()

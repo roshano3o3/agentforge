@@ -8,8 +8,11 @@ from agentforge_api.models.evaluation import (
     ResultStatus,
     RunStatus,
 )
+from agentforge_api.models.release import Baseline, ReleaseDecision
 
 __all__ = [
+    "Baseline",
+    "ReleaseDecision",
     "AgentStep",
     "Application",
     "ApplicationVersion",

@@ -332,3 +332,111 @@ class EvaluatorOut(BaseModel):
     key: str
     kind: str
     description: str
+
+
+# ---------------------------------------------------------------------------
+# Baselines, regression, release gate (Phase 4). The regression arithmetic
+# and check definitions live in agentforge_evaluators.release.
+# ---------------------------------------------------------------------------
+
+
+class BaselineSet(BaseModel):
+    """Point (the run's application, `environment`) at a completed run."""
+
+    model_config = {"extra": "forbid"}
+
+    run_id: str
+    environment: str = Field(min_length=1, max_length=50)
+
+
+class BaselineOut(BaseModel):
+    application_id: str
+    application_name: str
+    environment: str
+    run_id: str
+    set_at: datetime
+    # Context about the run it points to.
+    application_version: str
+    dataset_name: str
+    dataset_version: int
+    pass_rate: float | None
+
+
+class ReleaseDecisionCreate(BaseModel):
+    """Evaluate a candidate run against a baseline under `policy` (the
+    `release_policy` block of agentforge.yaml). `baseline` is an environment
+    name (resolved through the candidate's application's baseline pointer) or
+    a run id. The API computes every check; the client supplies no numbers."""
+
+    model_config = {"extra": "forbid"}
+
+    candidate_run_id: str
+    baseline: str = Field(min_length=1, max_length=100)
+    policy: dict[str, Any]
+
+
+class GateCheckOut(BaseModel):
+    kind: Literal["minimum", "maximum", "regression", "cases"]
+    metric: str
+    rule: str
+    threshold: float | None
+    baseline: float | None
+    candidate: float | None
+    delta: float | None
+    delta_pct: float | None
+    passed: bool
+    reason: str
+
+
+class ReleaseDecisionOut(BaseModel):
+    id: str
+    application_id: str
+    application_name: str
+    candidate_run_id: str
+    baseline_run_id: str
+    baseline_ref: str
+    policy: dict[str, Any]
+    passed: bool
+    checks: list[GateCheckOut]
+    # The regression report the checks were computed from (see RegressionOut).
+    regression: dict[str, Any]
+    created_at: datetime
+
+
+class MetricDeltaOut(BaseModel):
+    baseline: float | None
+    candidate: float | None
+    delta: float | None
+    delta_pct: float | None
+
+
+class EvaluatorDeltaOut(BaseModel):
+    name: str
+    unit: str | None
+    baseline_version: str | None
+    candidate_version: str | None
+    # False when the evaluator is missing from one run or ran at different versions.
+    comparable: bool
+    mean_score: MetricDeltaOut
+    pass_rate: MetricDeltaOut
+    mean_value: MetricDeltaOut
+
+
+class CaseChangeOut(BaseModel):
+    case_key: str
+    tags: list[str]
+    baseline_status: ResultStatus
+    candidate_status: ResultStatus
+    candidate_failed_evaluators: list[str]
+
+
+class RegressionOut(BaseModel):
+    baseline_run_id: str
+    candidate_run_id: str
+    dataset_version_id: str
+    # pass_rate, error_rate, p50/p95_latency_ms, estimated_cost_usd (ESTIMATED).
+    summary: dict[str, MetricDeltaOut]
+    metrics: list[EvaluatorDeltaOut]
+    # newly_failing / fixed / still_failing / still_passing
+    cases: dict[str, list[CaseChangeOut]]
+    case_counts: dict[str, int]

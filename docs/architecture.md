@@ -106,6 +106,9 @@ erDiagram
     TestCase ||--o{ EvaluationResult : "scored per"
     EvaluationResult ||--o{ MetricScore : "one per evaluator"
     EvaluationResult ||--o{ AgentStep : "trajectory, in order"
+    Application ||--o{ Baseline : "one per environment"
+    Baseline }o--|| EvaluationRun : "points to (completed)"
+    EvaluationRun ||--o{ ReleaseDecision : "candidate / baseline"
 ```
 
 - `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
@@ -156,6 +159,8 @@ Its planner is scripted Python, not a model.
 | A completed/failed run never changes | `transition()` refuses; no update route | trigger blocks UPDATE/DELETE of the run row |
 | Its results / metric scores never change | `assert_accepts_results()`; no client write route at all | triggers block INSERT/UPDATE/DELETE on `evaluation_results` and `metric_scores` |
 | Its agent steps never change | written only by the worker, with the result | trigger blocks INSERT/UPDATE/DELETE on `agent_steps` (migration `e8b4c2d61a9f`) |
+| A release decision never changes | no update/delete route | trigger blocks every UPDATE/DELETE on `release_decisions` (migration `f3c7a9e2b510`) |
+| A baseline points to a completed run of its own application | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` |
 | A published case's trajectory expectations never change | `PATCH` → `409` | the published-`test_cases` trigger covers every column, `trajectory` included |
 
 Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
@@ -331,7 +336,7 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Release policy engine and gate, regression comparison, replay, trace/span
+Release gate in CI and its dashboard pages (the gate itself is API + CLI), replay, trace/span
 persistence (trajectories are what the adapter reports, not instrumented
 traces), safety/adversarial testing, model
 comparison, LLM-as-judge evaluators, Regression/Trace Explorer/Safety

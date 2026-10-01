@@ -74,11 +74,19 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - Playwright case screenshots: grow the viewport to the page height before measuring/clipping
   (`screenshotCase` in e2e/trajectory-flow.spec.ts); fullPage/element captures came out a line off.
 
+- **Phase 4 part A done** (backend + CLI): baselines (pointer per app+env), regression (`GET /regression`,
+  400 on different dataset versions), release policy in `agentforge.yaml` (`agentforge_evaluators/release.py`,
+  validated on load), `agentforge gate` (API computes checks; immutable `release_decisions`, migration
+  `f3c7a9e2b510`; exit 0/1/2; `$GITHUB_STEP_SUMMARY`). Real gate: v1->v1 PASSED, v1->v2 FAILED.
+  Tests: SQLite 190 passed + 17 skipped; Postgres 207; Playwright 4 (unchanged).
+- Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
+  (tags, metric names like `newly_failing[tag=critical]`, error messages).
+
 ## Phase plan
 1. Vertical slice: CLI eval, one deterministic evaluator, dashboard — **done**
 2. Evaluation engine: evaluators, worker + queue (Docker), aggregates — **done**
 3. Agent trajectory evaluation, LangGraph example agent — **done**
-4. Regression engine, release policy, CI gate (`agentforge gate`)
+4. Regression engine, release policy, CI gate (`agentforge gate`) — part A (backend + CLI) **done**
 5. Safety / adversarial testing
 6. OpenTelemetry tracing, Trace Explorer
 7. Failure replay

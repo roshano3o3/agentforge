@@ -1,4 +1,5 @@
-"""AgentForge CLI: dataset publish/validate, evaluate, runs list/show.
+"""AgentForge CLI: dataset publish/validate, evaluate, runs list/show,
+baseline set/show, compare, gate.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -8,6 +9,7 @@ completed or failed and prints the persisted results.
 from __future__ import annotations
 
 import io
+import os
 import sys
 import time
 from pathlib import Path
@@ -15,6 +17,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 # Windows consoles/pipes don't reliably default to UTF-8 (often cp1252),
@@ -33,6 +36,14 @@ from pydantic import ValidationError
 
 from agentforge_cli.dataset_io import DatasetFileError, validate_dataset_file
 from agentforge_cli.git_utils import current_commit_sha
+from agentforge_cli.release_io import (
+    ConfigError,
+    fmt_delta,
+    fmt_number,
+    load_config,
+    markdown_report,
+    verdict_line,
+)
 from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
 from agentforge_sdk import AgentForgeClient
 
@@ -40,7 +51,9 @@ app = typer.Typer(add_completion=False, help="AgentForge command-line interface.
 dataset_app = typer.Typer(add_completion=False, help="Manage evaluation datasets.")
 runs_app = typer.Typer(add_completion=False, help="Inspect evaluation runs.")
 app.add_typer(dataset_app, name="dataset")
+baseline_app = typer.Typer(add_completion=False, help="Baselines: (application, environment) -> run.")
 app.add_typer(runs_app, name="runs")
+app.add_typer(baseline_app, name="baseline")
 
 console = Console()
 
@@ -49,19 +62,23 @@ FINISHED = {"completed", "failed"}
 MEASUREMENT_EVALUATORS = {"latency", "token_usage", "estimated_cost"}
 
 AGENTFORGE_YAML_TEMPLATE = """\
-# AgentForge project configuration.
-#
-# Not read by anything yet -- application/dataset/evaluator names
-# are passed as CLI flags (see README). It is scaffolded now so release-gate
-# configuration (added in a later phase) has a home without another
-# breaking change to project layout.
+# AgentForge project configuration. Read by `agentforge gate` (validated on
+# load: unknown keys, unknown metrics and direction mistakes are errors).
 
 api_url: {api_url}
 
-# release:
-#   minimum: {{}}
-#   maximum: {{}}
-#   regression: {{}}
+# Release policy for `agentforge gate --candidate <run> --baseline <env|run>`.
+# Every check is arithmetic over the two runs' stored aggregates.
+# release_policy:
+#   minimums:                 # candidate >= value (higher-is-better metrics)
+#     pass_rate: 0.9
+#   maximums:                 # candidate <= value (lower-is-better metrics)
+#     p95_latency_ms: 500
+#   regressions:              # candidate vs baseline
+#     pass_rate: {{max_drop: 0.02}}             # at most 2 points lower
+#     p95_latency_ms: {{max_increase_pct: 25}}
+#   cases:
+#     no_newly_failing_tags: [critical]
 """
 
 
@@ -374,6 +391,177 @@ def runs_show(
             console.print(f"[red]Could not fetch run:[/red] {exc}")
             raise typer.Exit(code=1) from None
     _print_run(run)
+
+
+# -- baselines, regression, release gate -------------------------------------------
+
+
+@baseline_app.command("set")
+def baseline_set(
+    run_id: str = typer.Argument(..., help="A completed run id."),
+    env: str = typer.Option(..., "--env", help="Environment name, e.g. production."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+) -> None:
+    """Point (the run's application, ENV) at RUN_ID. Only the pointer changes."""
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            row = client.set_baseline(run_id, env)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not set baseline:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    console.print(
+        f"Baseline [bold]{row['application_name']}[/bold] / [bold]{row['environment']}[/bold] -> run {row['run_id']} "
+        f"({row['application_version']}, {row['dataset_name']} v{row['dataset_version']}, "
+        f"pass_rate={fmt_number(row['pass_rate'])})"
+    )
+
+
+@baseline_app.command("show")
+def baseline_show(
+    app_name: str | None = typer.Option(None, "--app", help="Only this application."),
+    env: str | None = typer.Option(None, "--env", help="Only this environment."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+) -> None:
+    """List baseline pointers."""
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            rows = client.list_baselines(app_name, env)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not list baselines:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    if not rows:
+        console.print("No baselines set. Set one with: agentforge baseline set <run_id> --env <environment>")
+        return
+    table = Table(title="Baselines")
+    for col in ("Application", "Environment", "Run", "App version", "Dataset", "Pass rate", "Set at"):
+        table.add_column(col)
+    for r in rows:
+        table.add_row(
+            r["application_name"],
+            r["environment"],
+            r["run_id"],
+            r["application_version"],
+            f"{r['dataset_name']} v{r['dataset_version']}",
+            fmt_number(r["pass_rate"]),
+            r["set_at"],
+        )
+    console.print(table)
+
+
+def _print_regression(report: dict[str, Any]) -> None:
+    table = Table(title="Run-level deltas (candidate - baseline)")
+    for col in ("Metric", "Baseline", "Candidate", "Delta"):
+        table.add_column(col)
+    for metric, d in report["summary"].items():
+        table.add_row(metric, fmt_number(d["baseline"], metric), fmt_number(d["candidate"], metric), fmt_delta(d))
+    console.print(table)
+    table = Table(title="Per-evaluator deltas")
+    for col in ("Evaluator", "Mean score", "Pass rate", "Mean value", "Note"):
+        table.add_column(col)
+    for m in report["metrics"]:
+        note = "" if m["comparable"] else f"not comparable ({m['baseline_version']} vs {m['candidate_version']})"
+        table.add_row(
+            m["name"],
+            fmt_delta(m["mean_score"]),
+            fmt_delta(m["pass_rate"]),
+            fmt_delta(m["mean_value"]),
+            note,
+        )
+    console.print(table)
+    counts = report["case_counts"]
+    console.print("Cases: " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in counts.items()))
+    for case in report["cases"]["newly_failing"]:
+        # escape(): Rich would read "[refund, critical]" as markup and drop it.
+        tags = escape(f" [{', '.join(case['tags'])}]") if case["tags"] else ""
+        failed_by = ", ".join(case["candidate_failed_evaluators"]) or case["candidate_status"]
+        console.print(f"  newly failing: {case['case_key']}{tags}: {failed_by}")
+    for case in report["cases"]["fixed"]:
+        console.print(f"  fixed: {case['case_key']}")
+
+
+@app.command()
+def compare(
+    baseline: str = typer.Option(..., "--baseline", help="Baseline run id."),
+    candidate: str = typer.Option(..., "--candidate", help="Candidate run id."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+) -> None:
+    """Regression report between two completed runs of the same dataset version."""
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            report = client.regression(baseline, candidate)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not compare:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    _print_regression(report)
+
+
+@app.command()
+def gate(
+    candidate: str = typer.Option(..., "--candidate", help="Candidate run id."),
+    baseline: str = typer.Option(..., "--baseline", help="Baseline environment (e.g. production) or run id."),
+    config: Path = typer.Option(Path("agentforge.yaml"), "--config", help="Project config with release_policy."),
+    api_url: str | None = typer.Option(None, "--api-url", help="Default: api_url from the config, else localhost."),
+) -> None:
+    """Evaluate the release policy for CANDIDATE against BASELINE.
+
+    The API computes every check from the persisted runs (pure arithmetic,
+    no LLM) and stores an immutable ReleaseDecision. Writes a Markdown report
+    to $GITHUB_STEP_SUMMARY when it's set. Exit code: 0 PASSED, 1 FAILED,
+    2 the gate couldn't be evaluated (bad config, missing run or baseline, API error).
+    """
+    try:
+        project = load_config(config)
+    except ConfigError as exc:
+        console.print(f"[red]Invalid config:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=2) from None
+    if project.policy is None:
+        console.print(f"[red]Invalid config:[/red] {config} has no release_policy")
+        raise typer.Exit(code=2)
+    with AgentForgeClient(base_url=api_url or project.api_url or DEFAULT_API_URL) as client:
+        try:
+            decision = client.create_release_decision(candidate, baseline, project.policy.to_dict())
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Gate could not be evaluated:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=2) from None
+
+    console.print(
+        f"Release gate for [bold]{decision['application_name']}[/bold]: candidate {decision['candidate_run_id']} "
+        f"vs baseline '{decision['baseline_ref']}' (run {decision['baseline_run_id']})"
+    )
+    table = Table(title=f"Checks ({config})")
+    for col in ("Result", "Check", "Metric", "Baseline", "Candidate", "Delta", "Threshold", "Reason"):
+        table.add_column(col, overflow="fold")
+    for c in decision["checks"]:
+        table.add_row(
+            "pass" if c["passed"] else "[red]FAIL[/red]",
+            c["kind"],
+            escape(c["metric"]),  # "newly_failing[tag=critical]" would be read as markup
+            fmt_number(c["baseline"], c["metric"]),
+            fmt_number(c["candidate"], c["metric"]),
+            fmt_delta(c),
+            escape(c["rule"]),
+            escape(c["reason"]),
+        )
+    console.print(table)
+    counts = decision["regression"]["case_counts"]
+    console.print("Cases: " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in counts.items()))
+    for case in decision["regression"]["cases"]["newly_failing"]:
+        # escape(): Rich would read "[refund, critical]" as markup and drop it.
+        tags = escape(f" [{', '.join(case['tags'])}]") if case["tags"] else ""
+        failed_by = ", ".join(case["candidate_failed_evaluators"]) or case["candidate_status"]
+        console.print(f"  newly failing: {case['case_key']}{tags}: {failed_by}")
+    console.print(f"Decision {decision['id']} recorded (immutable).")
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write(markdown_report(decision))
+        console.print(f"Markdown report appended to {summary_path}")
+
+    # Plain print: the last line is exactly this, for scripts and CI logs.
+    print(verdict_line(decision["passed"]))
+    if not decision["passed"]:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

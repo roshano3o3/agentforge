@@ -20,7 +20,8 @@ Production evaluation, safety testing, observability, and release gating for AI 
 - **Labels:** every result of a `local-deterministic` run is labeled **fixture-based** (CLI, API, dashboard) — it comes from a synthetic app and deterministic heuristics, not a real model.
 - **CLI** (`agentforge evaluate`) submits a run through the API and polls until it finishes; nothing executes in the CLI process.
 - **Dashboard** (`apps/web`, Next.js): Applications, Datasets, and a real **Runs** list + **Run detail** page — start a run from a form, watch it go pending → running (live progress) → completed/failed, per-case answers, errors, and every evaluator's score, verdict, reason and evidence. For agent cases, a **trajectory timeline**: every step in order (number, kind, tool, args, result or error), the steps a failed evaluator blamed in red with its reason beside them, failures not tied to one step listed under the timeline, and long args/results collapsed behind "show more". Loading, empty, error, pending, running and failed states are all real. Regression / Trace Explorer / Safety are still disabled nav links, because none of them exists yet.
-- **Tests:** 168 automated — 164 Python (unit per evaluator, config rule and step-parsing rule; integration run lifecycle incl. timing-out and crashing cases; per-case config; the invoice agent's v1 and v2 runs end to end; raw-SQL trigger tests; CLI → API → Redis → Docker worker end-to-end) and 4 Playwright browser tests (two start runs from the UI; the trajectory ones open a v1 and a v2 case and check the highlighted step and its reason). See [Testing](#testing).
+- **Release gate** (Phase 4 part A): baselines, regression reports and `agentforge gate` — see [Release gate](#release-gate-phase-4-part-a-backend--cli).
+- **Tests:** 211 automated — 207 Python (unit per evaluator, config rule and step-parsing rule; integration run lifecycle incl. timing-out and crashing cases; per-case config; the invoice agent's v1 and v2 runs end to end; raw-SQL trigger tests; CLI → API → Redis → Docker worker end-to-end) and 4 Playwright browser tests (two start runs from the UI; the trajectory ones open a v1 and a v2 case and check the highlighted step and its reason). See [Testing](#testing).
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml), every push and pull request), three jobs: **lint** (ruff check, ruff format --check, mypy, eslint, tsc); **python** (the suite against Postgres + Redis service containers with the worker as a container, then again on SQLite); **browser** (Playwright + Chromium against Postgres + Redis with the worker as a container).
 
 Everything in the CLI output and the dashboard comes from real, persisted rows. Nothing is hardcoded.
@@ -166,6 +167,61 @@ In the dashboard, the v2 run's `refund-over-limit-001` (from the Playwright run)
 
 and the same request under v1, nothing flagged: [`trajectory-v1-passing.png`](docs/screenshots/trajectory-v1-passing.png) (`refund-small-001`).
 
+## Release gate (Phase 4, part A: backend + CLI)
+
+A **baseline** is a pointer — (application, environment) → one completed run. Setting it changes that pointer and nothing else; no result is copied. `agentforge baseline set <run_id> --env production`, `agentforge baseline show`.
+
+A **regression report** compares two completed runs of the **same dataset version** (`400` otherwise): run-level deltas (pass rate, error rate, P50/P95 latency, **estimated** cost; absolute and %), per-evaluator deltas (flagged *not comparable* when the evaluator version differs), and every case classified `newly_failing` / `fixed` / `still_failing` / `still_passing`. `GET /regression`, `agentforge compare`.
+
+The **release policy** lives in [`agentforge.yaml`](agentforge.yaml) and is validated on load (unknown keys or metrics, a minimum on a lower-is-better metric, `max_drop` on latency, fractions outside 0..1 are all errors):
+
+```yaml
+release_policy:
+  minimums:    {pass_rate: 0.9, approval_required.pass_rate: 1.0}
+  maximums:    {error_rate: 0, p95_latency_ms: 2000}
+  regressions:                             # direction-aware, vs the baseline
+    pass_rate: {max_drop: 0.02}            # at most 2 points lower
+    tool_selection.mean_score: {max_drop: 0.05}
+    p95_latency_ms: {max_increase: 500}
+  cases:
+    no_newly_failing_tags: [critical]
+```
+
+`agentforge gate --candidate <run> --baseline production` sends the policy to the API, which computes **every check with plain arithmetic** over the two runs' stored aggregates and per-case verdicts (no LLM; the client supplies no numbers), stores an **immutable `ReleaseDecision`** (each check's metric, baseline, candidate, threshold, delta, pass/fail; a DB trigger blocks UPDATE and DELETE), prints the table, appends a Markdown report to `$GITHUB_STEP_SUMMARY` when set, and exits **0 PASSED / 1 FAILED / 2 couldn't evaluate**. A value that wasn't measured (e.g. cost with no pricing) fails its check rather than passing silently.
+
+Real output on the Docker stack (invoice agent, fixture-based; v1 run `4833bfb6…` set as the production baseline):
+
+```
+$ agentforge gate --candidate 80e6b7fb-9004-4eee-8be1-abb643a9fbfd --baseline production   # another v1 run
+│ pass   │ minimum    │ pass_rate                   │ 1        │ 1         │ +0 (+0.0%)      │ >= 0.9          │ 1 >= 0.9                         │
+│ pass   │ minimum    │ approval_required.pass_rate │ 1        │ 1         │ +0 (+0.0%)      │ >= 1            │ 1 >= 1                           │
+│ pass   │ maximum    │ error_rate                  │ 0        │ 0         │ +0              │ <= 0            │ 0 <= 0                           │
+│ pass   │ maximum    │ p95_latency_ms              │ 21.7     │ 13.4      │ -8.274 (-38.1%) │ <= 2000         │ 13.4415 <= 2000                  │
+│ pass   │ regression │ pass_rate                   │ 1        │ 1         │ +0 (+0.0%)      │ drop <= 0.02    │ drop 0 (1 -> 1) within 0.02      │
+│ pass   │ regression │ tool_selection.mean_score   │ 1        │ 1         │ +0 (+0.0%)      │ drop <= 0.05    │ drop 0 (1 -> 1) within 0.05      │
+│ pass   │ regression │ p95_latency_ms              │ 21.7     │ 13.4      │ -8.274 (-38.1%) │ increase <= 500 │ improved (21.7151 -> 13.4415)    │
+│ pass   │ cases      │ newly_failing[tag=critical] │ -        │ 0         │ -               │ == 0            │ no newly failing 'critical' case │
+Cases: newly failing 0, fixed 0, still failing 0, still passing 10
+RELEASE GATE: PASSED                                                                            (exit 0)
+
+$ agentforge gate --candidate 57d93fd4-ce91-4705-bf2d-be8fbdeb907c --baseline production   # v2
+│ FAIL   │ minimum    │ pass_rate                   │ 1        │ 0.4       │ -0.6 (-60.0%)  │ >= 0.9          │ 0.4 < 0.9                           │
+│ FAIL   │ minimum    │ approval_required.pass_rate │ 1        │ 0         │ -1 (-100.0%)   │ >= 1            │ 0 < 1                               │
+│ pass   │ maximum    │ error_rate                  │ 0        │ 0         │ +0             │ <= 0            │ 0 <= 0                              │
+│ pass   │ maximum    │ p95_latency_ms              │ 21.7     │ 19.6      │ -2.086 (-9.6%) │ <= 2000         │ 19.6294 <= 2000                     │
+│ FAIL   │ regression │ pass_rate                   │ 1        │ 0.4       │ -0.6 (-60.0%)  │ drop <= 0.02    │ drop 0.6 (1 -> 0.4) exceeds 0.02    │
+│ FAIL   │ regression │ tool_selection.mean_score   │ 1        │ 0.78      │ -0.22 (-22.0%) │ drop <= 0.05    │ drop 0.22 (1 -> 0.78) exceeds 0.05  │
+│ pass   │ regression │ p95_latency_ms              │ 21.7     │ 19.6      │ -2.086 (-9.6%) │ increase <= 500 │ improved (21.7151 -> 19.6294)       │
+│ FAIL   │ cases      │ newly_failing[tag=critical] │ -        │ 3         │ -              │ == 0            │ newly failing 'critical' case(s):   │
+│        │            │                             │          │           │                │                 │ refund-over-limit-001,              │
+│        │            │                             │          │           │                │                 │ refund-small-001,                   │
+│        │            │                             │          │           │                │                 │ void-duplicate-001                  │
+Cases: newly failing 6, fixed 0, still failing 0, still passing 4
+RELEASE GATE: FAILED                                                                            (exit 1)
+```
+
+(Table borders and header trimmed; the full output also lists each newly failing case with its tags and failed evaluators.) Not yet built: the dashboard pages for baselines and decisions, and a CI workflow that runs the gate (Phase 4 part B).
+
 ## Dataset version lifecycle
 
 Unchanged from Phase 1: a `DatasetVersion` is a **draft** (edit test cases freely) until **published**, then frozen forever — enforced by the service layer (`409` on PATCH) and independently by DB triggers. "Editing" a published version means `POST .../new-draft`. Runs may only target published versions (`400` otherwise), so a run's dataset can never change under it. A version's evaluator config (`default_evaluators` and each case's `evaluators`) is part of that frozen content.
@@ -193,6 +249,7 @@ cd apps\web ; npx eslint src e2e playwright.config.ts ; npm run typecheck   # ne
 Run `docker-up.ps1` first for the Docker modes. The test scripts rebuild the worker image (cached) so the test worker runs the checked-out code, use their own databases and Redis DB indexes, and remove their worker containers afterwards — the dev database and dev queue (Redis DB 0) are never touched.
 
 - **Unit** (`tests/unit`): every evaluator with its per-case params (including not-applicable and never-guess paths for tokens/cost), config validation and merge rules, the registry, pricing parsing, and aggregation/percentiles.
+- **Release gate** (`tests/unit/test_release_policy.py`, `test_release_gate.py`, `tests/e2e/test_cli_gate.py`): policy parsing and every rejection (unknown metric, wrong direction, out-of-range fraction, empty policy), every check type with hand-computed numbers (incl. float-safe 2-point drops, percentage rules with a zero baseline, unmeasured values, evaluator version mismatch, case and tag checks); baseline pointers set and re-pointed without copying; v1 baseline → v1 candidate **PASSES** and → v2 candidate **FAILS** on exactly the expected checks; runs of different dataset versions → `400`; release decisions and baseline pointers enforced by DB triggers; the real CLI's exit codes (0 / 1 / 2), verdict line and `$GITHUB_STEP_SUMMARY` report.
 - **Trajectories** (`test_trajectory_runs.py`, `tests/unit/test_trajectory_evaluators.py`, `tests/unit/test_adapter_steps.py`): the invoice agent's v1 passes all 10 cases with every step persisted in order (args, results, tool errors); every v2 regression fails exactly the evaluators that should catch it, with the exact reasons and failing step numbers; trajectory blocks are validated on write (`422`), carried to new drafts and frozen when published; a restarted run replaces partial steps; malformed steps from an adapter are rejected with specific reasons; each trajectory evaluator's pass and fail paths.
 - **Per-case config** (`test_evaluator_config.py`): a run applies exactly each case's configured evaluators (dropped defaults stay dropped, params land in evidence, aggregates count only applied cases); explicit `--evaluators` filters; a config that applies nothing is rejected; invalid configs and retired fields are rejected on write; PATCH keeps the default config unless it's sent; Phase 2 legacy fields still apply and convert on new-draft without rewriting the published row.
 - **Integration** (`tests/integration`): the run lifecycle through the real API with the worker's real `execute_run` — pending + enqueued, draft/unknown-evaluator/malformed-adapter rejection, unreachable queue → run marked failed + `503`, full completion with every evaluator, **a timing-out case and crashing cases** (`RuntimeError`, `SystemExit`, malformed output) recorded while the run completes, finished-run immutability in the service layer, restart after a dead worker, unimportable adapter → failed run with reason, and the HTTP adapter contract against a real local HTTP server. Plus datasets/applications as before.
@@ -206,8 +263,8 @@ Last run in this environment (Python 3.12.7, Windows 11, Docker Desktop 29.8.1, 
 
 | Suite | Result |
 |---|---|
-| `test.ps1` (SQLite) | 150 passed, 14 skipped (12 trigger tests, 2 worker e2e tests) |
-| `test.ps1 -Postgres` | 164 passed |
+| `test.ps1` (SQLite) | 190 passed, 17 skipped (14 trigger tests, 3 worker e2e tests) |
+| `test.ps1 -Postgres` | 207 passed |
 | `test-ui.ps1` | 4 passed |
 | ruff check / ruff format --check / mypy / eslint / tsc | all clean |
 | CI (GitHub Actions, ubuntu: lint, python, browser jobs) | see the badge above |
@@ -246,7 +303,8 @@ Read this before assuming a feature exists.
 - **A run interrupted by a worker shutdown is marked failed**, not resumed. A hard-killed worker (no chance to clean up) gets one arq retry, which restarts that run from scratch.
 - **All evaluators are deterministic string/ID heuristics.** No LLM-as-judge, no semantic similarity, no RAGAS. `heuristic_context_*` are ID-overlap heuristics, not the RAGAS metrics of similar names.
 - **Token counts and model names are only what the adapter reports**; cost is only an estimate, and only for models listed in `config/pricing.yaml` (which ships with none but the $0 fixture).
-- **Case pass/fail is strict**: any failing evaluator fails the case. There is no per-evaluator weighting or gate policy yet (Phase 4).
+- **Case pass/fail is strict**: any failing evaluator fails the case; there is no per-evaluator weighting. The release gate's checks are over run-level aggregates and case verdicts only.
+- **The release gate has no dashboard page or CI workflow yet** (Phase 4 part B); it's API + CLI. Baselines are one pointer per (application, environment) with no history of earlier pointers (each `ReleaseDecision` records the baseline run it used). Regression comparison requires the same dataset version: re-publishing a dataset means re-running the baseline.
 - **No-Docker (SQLite) mode can't execute runs** (see Quick start). The SQLite path remains for the API, datasets, and the in-process test suite.
 - **Docker Compose and the PowerShell scripts are exercised on one Windows machine only.** CI (Linux) runs the same tests, but with GitHub service containers and `docker run`, not Compose.
 - **Per-case config can't be edited in the dashboard yet.** The dataset page shows each version's default and per-case evaluator config; set it through the YAML file (`agentforge dataset publish`) or the API. Cases added in the UI inherit the version's defaults.
@@ -255,14 +313,14 @@ Read this before assuming a feature exists.
 - **Trajectory checks are literal rules, not judgment.** `approval_required` matches approvals to guarded calls by order only, not by arguments (an approval for one invoice covers the next guarded call on another); `loop_detection` only sees *identical* args; `tool_selection` compares distinct tool names and ignores call counts; nothing judges whether a step was *wise* beyond what the dataset declares.
 - **Steps are stored in full**, with no size cap on args/results (the dashboard collapses long ones); the run page loads every case's steps at once, with no pagination.
 - **Trajectory expectations can't be edited in the dashboard** — set them in the dataset YAML or through the API, like per-case evaluator config.
-- **No release gate, regression comparison, safety/adversarial testing, or trace persistence** — later phases.
+- **No safety/adversarial testing or trace persistence** — later phases.
 - **A known SQLite-only quirk:** timestamps re-read from SQLite can lose their UTC-offset suffix (same instant). Postgres doesn't.
 - **A draft PATCH replaces the entire test-case set**, not a partial merge.
 - **`agentforge.yaml` (from `agentforge init`) is not read by anything yet.**
 
 ## What's next
 
-Phase 4 (regression engine, release policy, CI gate — v1 vs v2 above is exactly the comparison it will automate), Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
+Phase 4 part B (gate in CI, dashboard pages for baselines and release decisions), Phase 5 (safety/adversarial testing), Phase 6 (OpenTelemetry tracing), Phase 7 (failure replay), remaining dashboard pages, then a reproducible benchmark. Not started; not claimed as done.
 
 ## License
 

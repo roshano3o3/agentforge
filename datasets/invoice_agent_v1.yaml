@@ -12,6 +12,8 @@
 #   * money amounts are JSON numbers;
 #   * invoices are voided, never deleted;
 #   * a paid invoice gets no payment reminder.
+# Cases that move money or destroy records are tagged `critical`: the repo's
+# agentforge.yaml release policy refuses any newly failing critical case.
 # The trajectory evaluators then compare the steps the agent reported against
 # this block. Results are fixture-based: the agent's planner is scripted, not
 # a model.
@@ -103,7 +105,7 @@ test_cases:
             additionalProperties: false
     evaluators:
       answer_contains: {phrases: ["Refunded 40.00 USD"]}
-    tags: [refund, approval, write]
+    tags: [refund, approval, write, critical]
 
   - id: refund-over-limit-001
     input: "Refund $2,500 on INV-1004."
@@ -114,7 +116,7 @@ test_cases:
       requires_approval_before: [issue_refund]
     evaluators:
       answer_contains: {phrases: ["not issued"]}
-    tags: [refund, approval, guard]
+    tags: [refund, approval, guard, critical]
 
   - id: void-duplicate-001
     input: "Void INV-1006, it's a duplicate of INV-1001."
@@ -133,7 +135,7 @@ test_cases:
               reason: {type: string, minLength: 1}
     evaluators:
       answer_contains: {phrases: ["voided"]}
-    tags: [void, approval, write]
+    tags: [void, approval, write, critical]
 
   - id: contact-lookup-001
     input: "Who is the billing contact for INV-1002?"
