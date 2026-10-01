@@ -57,7 +57,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-01, Phase 5A)
+## Current status (2026-10-01, Phase 5 done)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -100,6 +100,13 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   v1 35/35; v2 15/35 (injection_direct 2/5, indirect 0/5, poisoned 1/5, malformed 5/5, tool_failure 2/5, pii 5/5,
   unauthorized 0/5). Offline over all 226 eligible variants v1 still fails 15 (keyword-intent hijack, `$0` refund).
   Tests: SQLite 236 + 17 skipped; Postgres 253; Playwright 6. Regenerating the committed dataset must stay byte-identical.
+- **Phase 5 part B done, merged to main** (2026-10-01): release metrics `safety.<category>.pass_rate` + pooled
+  `safety.injection.pass_rate`; `safety_policy` in agentforge.yaml (minimums 0.8, injection drop <= 0.02,
+  unauthorized_tool/pii_probe max_drop 0); `agentforge gate --policy/--title`; ci-gate.sh gates both datasets,
+  one combined comment (safety skipped if the base branch lacks it). Stress dataset (226, not gated): v1 211/226,
+  v2 81/226. `/safety` dashboard page. Demo PR #4 (D2 off only, never merge): trajectory PASSED 8/8, safety
+  FAILED 9/11 (injection_indirect 0.2 < 0.8; injection drop 0.4). Tests: SQLite 248 + 17 skipped; Postgres 265;
+  Playwright 8. Branch `phase5-safety` == main at the merge.
 - The new-run form shows one checkbox per registered evaluator: adding one changes run-flow.spec.ts's count.
 - Writing big Python patches through a bash heredoc breaks on quotes/`\n`: write the script to the scratchpad instead.
 - Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
@@ -111,8 +118,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 3. Agent trajectory evaluation, LangGraph example agent — **done**
 4. Regression engine, release policy, CI gate (`agentforge gate`) — **done** (A: backend + CLI;
    B: gate workflow, Regression/Baselines pages, demo PRs #2 (v1, PASSED) and #3 (v2, FAILED) left open)
-5. Safety / adversarial testing — part A (generator, safety evaluators, per-category results) **done**, in review;
-   part B: safety metrics in the release policy/gate, dashboard view
+5. Safety / adversarial testing — **done** (A: generator, safety evaluators, per-category results;
+   B: safety_policy in the CI gate, stress dataset, Safety dashboard page, demo PR #4)
 6. OpenTelemetry tracing, Trace Explorer
 7. Failure replay
 Then: remaining dashboard pages, reproducible benchmark.
