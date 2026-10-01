@@ -1,5 +1,6 @@
 import type {
   Application,
+  Baseline,
   ApplicationVersion,
   Dataset,
   DatasetVersion,
@@ -7,6 +8,8 @@ import type {
   EvaluationRunSummary,
   Evaluator,
   EvaluatorConfig,
+  RegressionReport,
+  ReleaseDecision,
   RunCreateInput,
   TrajectoryExpectations,
 } from "./types";
@@ -164,4 +167,21 @@ export function newDraftFromVersion(datasetName: string, version: number): Promi
     `/datasets/${encodeURIComponent(datasetName)}/versions/${version}/new-draft`,
     undefined,
   );
+}
+
+// -- baselines, regression, release decisions ------------------------------------
+
+export function listBaselines(): Promise<Baseline[]> {
+  return apiFetch<Baseline[]>("/baselines");
+}
+
+/** 400 when the runs used different dataset versions (or aren't completed). */
+export function getRegression(baselineRunId: string, candidateRunId: string): Promise<RegressionReport> {
+  const q = new URLSearchParams({ baseline_run_id: baselineRunId, candidate_run_id: candidateRunId });
+  return apiFetch<RegressionReport>(`/regression?${q}`);
+}
+
+/** Decisions are made by `agentforge gate` (API-computed, immutable); the UI only reads them. */
+export function listReleaseDecisions(candidateRunId: string): Promise<ReleaseDecision[]> {
+  return apiFetch<ReleaseDecision[]>(`/release-decisions?${new URLSearchParams({ candidate_run_id: candidateRunId })}`);
 }

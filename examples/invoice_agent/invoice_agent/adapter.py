@@ -1,4 +1,9 @@
-"""AgentForge adapters for the invoice agent: `answer_v1` and `answer_v2`.
+"""AgentForge adapters for the invoice agent.
+
+* `answer` -- this build: the behavior set in `invoice_agent/config.py`. The
+  CI release gate evaluates this one, at the base branch and at the PR.
+* `answer_v1` / `answer_v2` -- fixed presets (reference, and the regressed
+  refactor), independent of config.py, for tests and side-by-side runs.
 
 Each runs the LangGraph agent on one test-case input and reports its
 trajectory from the graph's own message history: every tool call (name,
@@ -19,7 +24,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from agentforge_sdk import AdapterOutput, Step
-from invoice_agent.agent import Version, build_graph, completed_calls
+from invoice_agent.agent import V1, V2, Behavior, build_graph, completed_calls
+from invoice_agent.config import BEHAVIOR
 
 # Generous for these flows (at most ~8 graph steps); a policy that loops
 # forever fails the case with GraphRecursionError instead of hanging.
@@ -27,8 +33,8 @@ RECURSION_LIMIT = 25
 
 
 @cache
-def _graph(version: Version) -> CompiledStateGraph:
-    return build_graph(version)
+def _graph(behavior: Behavior) -> CompiledStateGraph:
+    return build_graph(behavior)
 
 
 def _steps(messages: Sequence[BaseMessage]) -> tuple[list[Step], str]:
@@ -42,17 +48,21 @@ def _steps(messages: Sequence[BaseMessage]) -> tuple[list[Step], str]:
     return steps, answer
 
 
-def _run(version: Version, input_text: str) -> AdapterOutput:
-    state = _graph(version).invoke(
+def _run(behavior: Behavior, input_text: str) -> AdapterOutput:
+    state = _graph(behavior).invoke(
         {"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT}
     )
     steps, answer = _steps(state["messages"])
     return AdapterOutput(answer=answer, steps=steps)
 
 
+def answer(input_text: str) -> AdapterOutput:
+    return _run(BEHAVIOR, input_text)
+
+
 def answer_v1(input_text: str) -> AdapterOutput:
-    return _run("v1", input_text)
+    return _run(V1, input_text)
 
 
 def answer_v2(input_text: str) -> AdapterOutput:
-    return _run("v2", input_text)
+    return _run(V2, input_text)

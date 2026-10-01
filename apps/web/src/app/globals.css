@@ -613,3 +613,71 @@ pre.step-value {
     grid-column: 2;
   }
 }
+
+/* -- regression page ---------------------------------------------------- */
+
+.delta {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.delta-better {
+  color: var(--pass);
+}
+
+.delta-worse {
+  color: var(--fail);
+}
+
+.delta-same {
+  color: var(--muted);
+}
+
+.case-classes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px 20px;
+}
+
+.case-class {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.case-class summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.case-class ul {
+  list-style: none;
+  margin-top: 6px;
+}
+
+.case-class li {
+  padding: 2px 0;
+}
+
+.case-worse {
+  border-left-color: var(--fail);
+}
+
+.case-better {
+  border-left-color: var(--pass);
+}
+
+.badge-critical {
+  border-color: var(--fail);
+  color: var(--fail);
+}
+
+.decision h3 {
+  font-size: 15px;
+  margin: 4px 0;
+}
+
+tr.check-failed td {
+  background: color-mix(in srgb, var(--fail) 7%, transparent);
+}

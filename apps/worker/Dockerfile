@@ -13,7 +13,10 @@ COPY packages/sdk /app/packages/sdk
 COPY apps/api /app/apps/api
 COPY apps/worker /app/apps/worker
 COPY examples/rag_app /app/examples/rag_app
-COPY examples/invoice_agent /app/examples/invoice_agent
+# The invoice agent's source is overridable so the CI release gate can build a
+# baseline image with the base branch's agent and everything else from the PR.
+ARG INVOICE_AGENT_DIR=examples/invoice_agent
+COPY ${INVOICE_AGENT_DIR} /app/examples/invoice_agent
 COPY config /app/config
 
 RUN pip install --no-cache-dir \

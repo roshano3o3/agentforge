@@ -501,6 +501,9 @@ def gate(
     baseline: str = typer.Option(..., "--baseline", help="Baseline environment (e.g. production) or run id."),
     config: Path = typer.Option(Path("agentforge.yaml"), "--config", help="Project config with release_policy."),
     api_url: str | None = typer.Option(None, "--api-url", help="Default: api_url from the config, else localhost."),
+    markdown: Path | None = typer.Option(
+        None, "--markdown", help="Also write the Markdown report to this file (e.g. for a PR comment)."
+    ),
 ) -> None:
     """Evaluate the release policy for CANDIDATE against BASELINE.
 
@@ -552,6 +555,9 @@ def gate(
         console.print(f"  newly failing: {case['case_key']}{tags}: {failed_by}")
     console.print(f"Decision {decision['id']} recorded (immutable).")
 
+    if markdown is not None:
+        markdown.write_text(markdown_report(decision), encoding="utf-8")
+        console.print(f"Markdown report written to {markdown}")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:

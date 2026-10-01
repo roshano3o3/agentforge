@@ -210,3 +210,82 @@ export interface DraftTestCaseForm {
   expected_context: string; // comma-separated in the form, split on submit
   tags: string; // comma-separated in the form, split on submit
 }
+
+// -- baselines, regression, release gate (Phase 4) ------------------------------
+
+export interface Baseline {
+  application_id: string;
+  application_name: string;
+  environment: string;
+  run_id: string;
+  set_at: string;
+  application_version: string;
+  dataset_name: string;
+  dataset_version: number;
+  pass_rate: number | null;
+}
+
+export interface MetricDelta {
+  baseline: number | null;
+  candidate: number | null;
+  delta: number | null; // candidate - baseline
+  delta_pct: number | null; // of |baseline|; null when the baseline is 0 or missing
+}
+
+export interface EvaluatorDelta {
+  name: string;
+  unit: string | null;
+  baseline_version: string | null;
+  candidate_version: string | null;
+  comparable: boolean;
+  mean_score: MetricDelta;
+  pass_rate: MetricDelta;
+  mean_value: MetricDelta;
+}
+
+export type CaseClass = "newly_failing" | "fixed" | "still_failing" | "still_passing";
+
+export interface CaseChange {
+  case_key: string;
+  tags: string[];
+  baseline_status: ResultStatus;
+  candidate_status: ResultStatus;
+  candidate_failed_evaluators: string[];
+}
+
+export interface RegressionReport {
+  baseline_run_id: string;
+  candidate_run_id: string;
+  dataset_version_id: string;
+  summary: Record<string, MetricDelta>;
+  metrics: EvaluatorDelta[];
+  cases: Record<CaseClass, CaseChange[]>;
+  case_counts: Record<CaseClass, number>;
+}
+
+export interface GateCheck {
+  kind: "minimum" | "maximum" | "regression" | "cases";
+  metric: string;
+  rule: string;
+  threshold: number | null;
+  baseline: number | null;
+  candidate: number | null;
+  delta: number | null;
+  delta_pct: number | null;
+  passed: boolean;
+  reason: string;
+}
+
+export interface ReleaseDecision {
+  id: string;
+  application_id: string;
+  application_name: string;
+  candidate_run_id: string;
+  baseline_run_id: string;
+  baseline_ref: string;
+  policy: Record<string, unknown>;
+  passed: boolean;
+  checks: GateCheck[];
+  regression: RegressionReport;
+  created_at: string;
+}

@@ -9,10 +9,12 @@ LangGraph's ToolNode executes) or the final answer. That keeps every run
 reproducible and model-free -- so results are fixture-based, not a measure
 of any model -- while the trajectory is produced by a real LangGraph graph.
 
-Two policies:
+How the planner behaves is a `Behavior`. The build that ships is whatever
+`invoice_agent/config.py` sets (the `answer` adapter); two fixed presets
+exist for tests and comparisons (`answer_v1`, `answer_v2`):
 
-* v1 -- the reference behavior.
-* v2 -- a "refactor" carrying five deliberate regressions, each one a bug a
+* V1 -- the reference behavior.
+* V2 -- a "refactor" carrying five deliberate regressions, each one a bug a
   trajectory check should catch even when the final answer looks fine:
     1. refunds under $100 take a "fast path" that skips human approval;
     2. approval is checked with `"approved" in result` (key present) instead
@@ -36,7 +38,36 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from invoice_agent.tools import INVOICES, TOOLS
 
-Version = Literal["v1", "v2"]
+
+@dataclass(frozen=True)
+class Behavior:
+    """Every switch the planner reads. V1 below is the correct setting."""
+
+    # Refunds below this amount (USD) skip human approval. 0 = always ask.
+    approval_exempt_under_usd: float = 0.0
+    # How an approval result is read: its "approved" value, or merely
+    # whether the key is present (which also accepts approved=false).
+    approval_check: Literal["value", "key_present"] = "value"
+    # Send refund amounts as "40.00" strings instead of numbers.
+    amount_as_string: bool = False
+    # Attempts at an invoice lookup, retried with identical args on error.
+    lookup_attempts: int = 1
+    # Look the invoice up (and skip paid ones) before sending a reminder.
+    check_status_before_reminder: bool = True
+    # How a duplicate invoice is removed: void it (after approval) or delete it.
+    void_tool: Literal["void_invoice", "delete_invoice"] = "void_invoice"
+
+
+V1 = Behavior()
+V2 = Behavior(
+    approval_exempt_under_usd=100.0,
+    approval_check="key_present",
+    amount_as_string=True,
+    lookup_attempts=3,
+    check_status_before_reminder=False,
+    void_tool="delete_invoice",
+)
+PRESETS = {"v1": V1, "v2": V2}
 
 
 @dataclass
@@ -90,8 +121,8 @@ def _not_found(call: Call, invoice_id: str) -> str:
 # -- the plan for each intent; `done` is every completed call, in order --------
 
 
-def _status(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
-    if not done or (v == "v2" and done[-1].error and len(done) < 3):  # regression 4: blind retry
+def _status(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
+    if not done or (done[-1].error and len(done) < b.lookup_attempts):
         return Next("get_invoice", {"invoice_id": invoice_id})
     last = done[-1]
     if last.error:
@@ -100,7 +131,7 @@ def _status(v: Version, invoice_id: str, request: str, done: list[Call]) -> Acti
     return f"{inv['id']} is {inv['status']}: {inv['amount']:.2f} {inv['currency']}, due {inv['due']}."
 
 
-def _contact(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
+def _contact(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
     if not done:
         return Next("get_invoice", {"invoice_id": invoice_id})
     if done[0].error:
@@ -111,7 +142,7 @@ def _contact(v: Version, invoice_id: str, request: str, done: list[Call]) -> Act
     return f"The billing contact for {invoice_id} is {cust['name']} <{cust['billing_email']}>."
 
 
-def _history(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
+def _history(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
     if not done:
         return Next("get_payment_history", {"invoice_id": invoice_id})
     if done[0].error:
@@ -123,11 +154,11 @@ def _history(v: Version, invoice_id: str, request: str, done: list[Call]) -> Act
     return f"{invoice_id} has {len(payments)} payment(s) recorded, totaling {total:.2f} USD."
 
 
-def _reminder(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
-    if v == "v2":  # regression 5a: no status check before reminding
+def _reminder(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
+    if not b.check_status_before_reminder:
         calls = {c.name: c for c in done}
         if "get_customer" not in calls:
-            return Next("get_customer", {"customer_id": _guess_customer(invoice_id)})
+            return Next("get_customer", {"customer_id": _cached_customer(invoice_id)})
         email = calls["get_customer"].result["billing_email"]
         if "send_payment_reminder" not in calls:
             return Next("send_payment_reminder", {"invoice_id": invoice_id, "email": email})
@@ -147,27 +178,27 @@ def _reminder(v: Version, invoice_id: str, request: str, done: list[Call]) -> Ac
     return f"{invoice_id} is {inv['status']}; payment reminder sent to {email}."
 
 
-def _guess_customer(invoice_id: str) -> str:
-    # v2 reads the customer from a cached index instead of the invoice.
+def _cached_customer(invoice_id: str) -> str:
+    # Without the status lookup, the customer comes from a cached index.
     return INVOICES.get(invoice_id, {}).get("customer_id", "CUST-UNKNOWN")
 
 
-def _refund(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
+def _refund(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
     amount = _amount(request)
     if amount is None:
         return "Please say how much to refund (for example, $40)."
-    sent_amount: float | str = f"{amount:.2f}" if v == "v2" else amount  # regression 3
+    sent_amount: float | str = f"{amount:.2f}" if b.amount_as_string else amount
     calls = {c.name: c for c in done}
     if "get_invoice" not in calls:
         return Next("get_invoice", {"invoice_id": invoice_id})
     if calls["get_invoice"].error:
         return _not_found(calls["get_invoice"], invoice_id)
-    fast_path = v == "v2" and amount < 100  # regression 1
-    if not fast_path and "request_human_approval" not in calls:
+    needs_approval = amount >= b.approval_exempt_under_usd
+    if needs_approval and "request_human_approval" not in calls:
         return Next("request_human_approval", {"action": "issue_refund", "invoice_id": invoice_id, "amount": amount})
-    if not fast_path:
+    if needs_approval:
         approval = calls["request_human_approval"].result
-        approved = "approved" in approval if v == "v2" else approval["approved"]  # regression 2
+        approved = "approved" in approval if b.approval_check == "key_present" else approval["approved"]
         if not approved:
             return (
                 f"The {amount:.2f} USD refund on {invoice_id} was not issued: "
@@ -181,13 +212,13 @@ def _refund(v: Version, invoice_id: str, request: str, done: list[Call]) -> Acti
     return f"Refunded {amount:.2f} USD on {invoice_id} (refund {refund.result['refund_id']})."
 
 
-def _void(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action:
+def _void(b: Behavior, invoice_id: str, request: str, done: list[Call]) -> Action:
     calls = {c.name: c for c in done}
     if "get_invoice" not in calls:
         return Next("get_invoice", {"invoice_id": invoice_id})
     if calls["get_invoice"].error:
         return _not_found(calls["get_invoice"], invoice_id)
-    if v == "v2":  # regression 5b: delete instead of void, no approval
+    if b.void_tool == "delete_invoice":
         if "delete_invoice" not in calls:
             return Next("delete_invoice", {"invoice_id": invoice_id})
         return f"{invoice_id} has been removed."
@@ -203,7 +234,7 @@ def _void(v: Version, invoice_id: str, request: str, done: list[Call]) -> Action
     return f"{invoice_id} has been voided as a duplicate."
 
 
-_PLANS: dict[str, Callable[[Version, str, str, list[Call]], Action]] = {
+_PLANS: dict[str, Callable[[Behavior, str, str, list[Call]], Action]] = {
     "status": _status,
     "contact": _contact,
     "history": _history,
@@ -218,7 +249,7 @@ OUT_OF_SCOPE = (
 )
 
 
-def plan(version: Version, request: str, done: list[Call]) -> Action:
+def plan(behavior: Behavior, request: str, done: list[Call]) -> Action:
     """The planner's whole decision: the next tool call, or the final answer."""
     intent = _intent(request)
     ids = _INVOICE_ID.findall(request)
@@ -226,7 +257,7 @@ def plan(version: Version, request: str, done: list[Call]) -> Action:
         return OUT_OF_SCOPE
     if not ids:
         return "Which invoice? Please include its number (for example, INV-1001)."
-    return _PLANS[intent](version, ids[0], request, done)
+    return _PLANS[intent](behavior, ids[0], request, done)
 
 
 # -- the graph -------------------------------------------------------------------
@@ -262,11 +293,11 @@ def _tool_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def build_graph(version: Version) -> CompiledStateGraph:
+def build_graph(behavior: Behavior) -> CompiledStateGraph:
     def agent(state: MessagesState) -> dict[str, list[BaseMessage]]:
         messages = state["messages"]
         done = completed_calls(messages)
-        action = plan(version, _request(messages), done)
+        action = plan(behavior, _request(messages), done)
         if isinstance(action, str):
             return {"messages": [AIMessage(content=action)]}
         call_id = f"call_{len(done) + 1}"

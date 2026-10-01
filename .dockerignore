@@ -10,3 +10,5 @@
 apps/web
 docs
 tests
+# The gate workflow's full base-branch checkout (only .gate/agent-base is used).
+.gate/base

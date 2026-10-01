@@ -65,7 +65,10 @@ def test_cli_gate_passes_v1_and_fails_v2(worker_api: str, tmp_path: Path) -> Non
     assert passed.stdout.rstrip().splitlines()[-1] == "RELEASE GATE: PASSED"
     assert summary.read_text(encoding="utf-8").startswith("## AgentForge release gate: PASSED")
 
-    failed = _cli([*gate_args, "--candidate", v2_candidate], GITHUB_STEP_SUMMARY=str(summary))
+    comment = tmp_path / "comment.md"
+    failed = _cli(
+        [*gate_args, "--candidate", v2_candidate, "--markdown", str(comment)], GITHUB_STEP_SUMMARY=str(summary)
+    )
     assert failed.returncode == 1, failed.stdout + failed.stderr
     assert failed.stdout.rstrip().splitlines()[-1] == "RELEASE GATE: FAILED"
     # Bracketed values survive Rich's markup parsing.
@@ -74,6 +77,8 @@ def test_cli_gate_passes_v1_and_fails_v2(worker_api: str, tmp_path: Path) -> Non
     report = summary.read_text(encoding="utf-8")
     assert "## AgentForge release gate: FAILED" in report  # appended after the PASSED one
     assert "| **FAIL** | minimum | `pass_rate` | 1 | 0.4 |" in report
+    # --markdown writes just this decision's report (what CI posts as the PR comment).
+    assert comment.read_text(encoding="utf-8").startswith("## AgentForge release gate: FAILED")
 
     # Both decisions were recorded by the API.
     decisions = httpx.get(f"{worker_api}/release-decisions", timeout=5).json()
