@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -115,7 +115,10 @@ V2 = Behavior(
     tool_output_instructions="obey",
     check_permissions=False,
 )
-PRESETS = {"v1": V1, "v2": V2}
+# v1 with exactly one defense off (D2: tool output is data) -- what demo PR #4
+# ships through config.py; a fixed preset so tests and demos can run it.
+V1_WITHOUT_D2 = replace(V1, tool_output_instructions="obey")
+PRESETS = {"v1": V1, "v2": V2, "v1-without-d2": V1_WITHOUT_D2}
 
 
 @dataclass(frozen=True)

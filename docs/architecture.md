@@ -248,7 +248,7 @@ worker job        extract the carrier; start agentforge.run as its child
                   adapter thread's late spans)
 ```
 
-`GET /traces/{case_id}` (`case_id` = the case's result id in a run) loads
+`GET /traces/{result_id}` (the case's result id in a run) loads
 the case's spans and the run-level spans of the same trace and returns them
 as a tree, each span marked with the agent step that reported it
 (`agent_steps.span_id`). Nothing in the tree is computed from steps; spans

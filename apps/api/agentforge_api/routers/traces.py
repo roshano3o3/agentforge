@@ -1,15 +1,16 @@
 """Stored traces: the span tree for one evaluated case.
 
-`case_id` is the id of the case's result in a run (`results[].id` in GET
-/runs/{id}), since a test case is evaluated once per run. The tree contains
-the run-level spans above it (the API's run creation, the worker's run) and
-everything recorded under the case. Spans are what the API, the worker and
-the agent recorded and stored; nothing is reconstructed or inferred here.
+A test case is evaluated once per run, so a case's trace is addressed by its
+**result id** in that run (`results[].id` in GET /runs/{id}). The tree
+contains the run-level spans above it (the API's run creation, the worker's
+run) and everything recorded under the case. Spans are what the API, the
+worker and the agent recorded and stored -- redacted of PII unless
+AGENTFORGE_TRACE_REDACTION=off -- nothing is reconstructed or inferred here.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,16 +23,29 @@ from agentforge_core.schemas import TraceOut, TraceSpanOut
 router = APIRouter(prefix="/traces", tags=["traces"])
 
 
-@router.get("/{case_id}", response_model=TraceOut)
-async def get_trace(case_id: str, session: AsyncSession = Depends(get_session)) -> TraceOut:
-    result = await session.get(EvaluationResult, case_id)
+@router.get(
+    "/{result_id}",
+    response_model=TraceOut,
+    summary="Span tree for one evaluated case",
+    responses={404: {"description": "No such result, or no spans were stored for it"}},
+)
+async def get_trace(
+    result_id: str = Path(
+        description="The case's result id in a run (`results[].id` from GET /runs/{run_id}), "
+        "not the test case id: a test case is evaluated once per run."
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> TraceOut:
+    """The case's stored spans as a tree, with the run-level spans above it and
+    each span's linked agent step (`step_index`)."""
+    result = await session.get(EvaluationResult, result_id)
     if result is None:
-        raise HTTPException(status_code=404, detail=f"case result '{case_id}' not found (use results[].id of a run)")
-    case_spans = list(await session.scalars(select(TraceSpan).where(TraceSpan.evaluation_result_id == case_id)))
+        raise HTTPException(status_code=404, detail=f"result '{result_id}' not found (use results[].id of a run)")
+    case_spans = list(await session.scalars(select(TraceSpan).where(TraceSpan.evaluation_result_id == result_id)))
     if not case_spans:
         raise HTTPException(
             status_code=404,
-            detail=f"no spans stored for case result '{case_id}' (tracing was off for its run, "
+            detail=f"no spans stored for result '{result_id}' (tracing was off for its run, "
             "or the run predates tracing)",
         )
     trace_id = case_spans[0].trace_id
@@ -47,7 +61,7 @@ async def get_trace(case_id: str, session: AsyncSession = Depends(get_session)) 
     steps = {
         s.span_id: s.step_index
         for s in await session.scalars(
-            select(AgentStep).where(AgentStep.evaluation_result_id == case_id, AgentStep.span_id.is_not(None))
+            select(AgentStep).where(AgentStep.evaluation_result_id == result_id, AgentStep.span_id.is_not(None))
         )
     }
     test_case = await session.get(TestCase, result.test_case_id)
@@ -61,7 +75,7 @@ async def get_trace(case_id: str, session: AsyncSession = Depends(get_session)) 
         node.children.sort(key=lambda n: (n.start_time, n.name))
     roots.sort(key=lambda n: n.start_time)
     return TraceOut(
-        case_id=case_id,
+        result_id=result_id,
         case_key=test_case.case_key if test_case else "",
         run_id=result.evaluation_run_id,
         trace_id=trace_id,

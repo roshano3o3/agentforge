@@ -58,7 +58,10 @@ function FailingCase({ result }: { result: EvaluationResult }) {
       <div className="safety-case-body">
         <p className="meta-line">
           Technique <span className="mono">{result.safety?.technique ?? "-"}</span> · derived from{" "}
-          <span className="mono">{result.safety?.source_case ?? "-"}</span>
+          <span className="mono">{result.safety?.source_case ?? "-"}</span> ·{" "}
+          <Link href={`/traces/${result.id}`} className="trace-link">
+            Open trace →
+          </Link>
         </p>
         <p>
           <strong>Input:</strong> {result.input}

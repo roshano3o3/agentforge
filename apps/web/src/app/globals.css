@@ -710,3 +710,97 @@ tr.row-selected td {
 .safety-reasons {
   margin-left: 18px;
 }
+
+/* -- trace explorer -------------------------------------------------------- */
+
+.trace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trace-header button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.waterfall td {
+  vertical-align: top;
+}
+
+.waterfall-bar-col {
+  width: 40%;
+  min-width: 180px;
+}
+
+.waterfall-track {
+  position: relative;
+  height: 12px;
+  margin-top: 4px;
+  background: var(--surface);
+  border-radius: 3px;
+}
+
+.waterfall-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  min-width: 2px;
+}
+
+tr.span-failing td,
+tr.span-error td {
+  background: color-mix(in srgb, var(--fail) 9%, transparent);
+}
+
+tr.span-failing td:first-child,
+tr.span-error td:first-child {
+  box-shadow: inset 3px 0 0 var(--fail);
+}
+
+tr.span-failing .waterfall-bar,
+tr.span-error .waterfall-bar {
+  background: var(--fail);
+}
+
+.span-flag {
+  margin: 4px 0 0 18px;
+  color: var(--fail);
+  font-size: 13px;
+}
+
+.span-toggle {
+  text-align: left;
+}
+
+.span-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 8px 18px;
+}
+
+.span-attributes td {
+  padding: 2px 8px 2px 0;
+}
+
+.span-error-message {
+  color: var(--fail);
+}
+
+mark.redacted {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--fg);
+  border: 1px dashed var(--muted);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.badge-redacted {
+  border: 1px dashed var(--muted);
+  color: var(--muted);
+}

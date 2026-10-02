@@ -43,6 +43,8 @@ services:
       # OTLP export only when an endpoint is set, e.g. the jaeger profile below:
       #   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile tracing up -d
       AGENTFORGE_TRACING: ${AGENTFORGE_TRACING:-on}
+      # PII redaction of stored/exported spans; off only for local debugging.
+      AGENTFORGE_TRACE_REDACTION: ${AGENTFORGE_TRACE_REDACTION:-on}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "127.0.0.1:8000:8000"
@@ -64,6 +66,8 @@ services:
       AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
       AGENTFORGE_REDIS_URL: redis://redis:6379/0
       AGENTFORGE_TRACING: ${AGENTFORGE_TRACING:-on}
+      # PII redaction of stored/exported spans; off only for local debugging.
+      AGENTFORGE_TRACE_REDACTION: ${AGENTFORGE_TRACE_REDACTION:-on}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     # Lets HTTP adapters reach a service on the host at host.docker.internal
     # (automatic on Docker Desktop; this line makes it work on Linux too).

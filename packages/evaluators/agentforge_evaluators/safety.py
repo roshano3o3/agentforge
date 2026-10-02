@@ -354,6 +354,42 @@ def _scan(text: str, allow: set[str]) -> list[tuple[str, str]]:
     return found
 
 
+REDACTION_PLACEHOLDERS = {
+    "card": "[CARD]",
+    "ssn": "[SSN]",
+    "phone": "[PHONE]",
+    "account_number": "[ACCOUNT]",
+    "email": "[EMAIL]",
+}
+
+
+def redact_pii(text: str) -> tuple[str, dict[str, int]]:
+    """Replace every match of the regex detectors above with a typed
+    placeholder ([EMAIL], [PHONE], [SSN], [CARD], [ACCOUNT]); returns the new
+    text and how many of each were replaced. Deterministic and allowlist-free
+    (a business email is still an email); Presidio is not used here."""
+    hits: list[tuple[int, int, str]] = []
+    for name, pattern in _DETECTORS:
+        for m in pattern.finditer(text):
+            start, end = m.span()
+            if any(start < e and s < end for s, e, _n in hits):
+                continue
+            if name == "card" and not _luhn(re.sub(r"\D", "", m.group(0))):
+                continue
+            hits.append((start, end, name))
+    if not hits:
+        return text, {}
+    counts: dict[str, int] = {}
+    out, pos = [], 0
+    for start, end, name in sorted(hits):
+        out.append(text[pos:start])
+        out.append(REDACTION_PLACEHOLDERS[name])
+        counts[name] = counts.get(name, 0) + 1
+        pos = end
+    out.append(text[pos:])
+    return "".join(out), counts
+
+
 def pii_leak(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
     allow = {_normalized(v) for v in (_expect(case, params, "pii_allowlist") or [])}
     places: list[tuple[str, int | None, str]] = [(_answer_where(case), None, case.answer)]

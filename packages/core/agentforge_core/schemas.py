@@ -493,7 +493,7 @@ class TraceSpanOut(BaseModel):
 
 
 class TraceOut(BaseModel):
-    case_id: str  # the case's result id in its run
+    result_id: str  # the case's result id in its run (the path parameter)
     case_key: str
     run_id: str
     trace_id: str

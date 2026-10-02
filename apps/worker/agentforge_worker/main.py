@@ -54,6 +54,7 @@ async def startup(ctx: dict) -> None:
         "off (AGENTFORGE_TRACING)"
         if collector is None
         else "on (spans stored per case"
+        + (", PII redaction on" if tracing.redaction_enabled() else ", PII redaction OFF")
         + (", OTLP export on)" if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") else ")"),
     )
     log.info("worker ready; priced models: %s", sorted(ctx["pricing"]) or "(none)")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from opentelemetry import trace
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentforge_api import tracing
@@ -134,8 +134,11 @@ async def create_run(
         )
         if collector is not None and span.get_span_context().is_valid:
             collector.discard(span.get_span_context().trace_id)
-    for s in claimed:
-        session.add(TraceSpan(run_id=run.id, evaluation_result_id=None, **tracing.row_values(s)))
+    if claimed:
+        await session.execute(
+            insert(TraceSpan),
+            [{**tracing.row_values(s), "run_id": run.id, "evaluation_result_id": None} for s in claimed],
+        )
     await session.commit()
 
     try:

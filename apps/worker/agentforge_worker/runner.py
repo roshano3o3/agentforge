@@ -26,7 +26,7 @@ from typing import Any
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentforge_api import tracing
@@ -169,10 +169,8 @@ def _eval_input(tc: TestCase, outcome: CaseOutcome) -> EvalInput:
 
 async def _store_run_spans(session: AsyncSession, run_id: str, spans: list[dict[str, Any]]) -> None:
     """Run-level spans, flushed before the final status change (after it, the trigger refuses them)."""
-    for values in spans:
-        session.add(TraceSpan(run_id=run_id, evaluation_result_id=None, **values))
     if spans:
-        await session.flush()
+        await session.execute(insert(TraceSpan), [{**v, "run_id": run_id, "evaluation_result_id": None} for v in spans])
 
 
 async def _fail(
@@ -295,8 +293,12 @@ async def _record(
                     labels=list(dict.fromkeys([*run_labels, *m.labels])),
                 )
             )
-        for values in spans or []:
-            session.add(TraceSpan(run_id=run_id, evaluation_result_id=result.id, **values))
+        if spans:
+            # One multi-row INSERT for the case's spans (after the result, scores and steps are flushed).
+            await session.flush()
+            await session.execute(
+                insert(TraceSpan), [{**v, "run_id": run_id, "evaluation_result_id": result.id} for v in spans]
+            )
         await session.commit()
 
 

@@ -17,6 +17,17 @@ belongs to; an OTLP exporter is added only if OTEL_EXPORTER_OTLP_ENDPOINT
 (or ..._TRACES_ENDPOINT) is set. AGENTFORGE_TRACING=off disables all of it:
 no spans recorded, none stored.
 
+PII redaction (on by default): every ended span passes through
+`RedactingProcessor` before anything stores or exports it. String
+attributes, event attributes and the status message are run through the
+pii_leak evaluator's regex detectors (agentforge_evaluators.safety.redact_pii)
+and matches become typed placeholders -- [EMAIL], [PHONE], [SSN], [CARD],
+[ACCOUNT]; the span gets `agentforge.redaction.count` and
+`agentforge.redacted` (which attributes, what kind). Identifier attributes
+(ids, hashes) are left alone. Evaluators never read spans, so they still see
+the unredacted data during the run. AGENTFORGE_TRACE_REDACTION=off turns it
+off, for local debugging only.
+
 Attribute names: OpenTelemetry GenAI semantic conventions where they fit
 (gen_ai.operation.name, gen_ai.tool.*, gen_ai.request.model,
 gen_ai.usage.*_tokens -- the latter only when the adapter reported them),
@@ -35,24 +46,115 @@ from typing import Any
 from opentelemetry import context as otel_context
 from opentelemetry import propagate, trace
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
 from opentelemetry.trace import Status, StatusCode
 
+from agentforge_evaluators.safety import redact_pii
 from agentforge_sdk.tracing import attribute_value
 
 TRACER_NAME = "agentforge"
+# Tracers whose spans are stored: the API's and worker's, and agents' (agentforge_sdk.tracing).
+STORED_SCOPES = frozenset({TRACER_NAME, "agentforge.agent"})
 _lock = threading.Lock()
 _collector: SpanCollector | None = None
+_redactor: RedactingProcessor | None = None
 _enabled: bool | None = None
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "on").strip().lower() not in ("off", "0", "false", "no")
 
 
 def enabled() -> bool:
     """AGENTFORGE_TRACING (default on); `off`, `0`, `false` disable tracing."""
     global _enabled
     if _enabled is None:
-        _enabled = os.environ.get("AGENTFORGE_TRACING", "on").strip().lower() not in ("off", "0", "false", "no")
+        _enabled = _flag("AGENTFORGE_TRACING")
     return _enabled
+
+
+def redaction_enabled() -> bool:
+    """AGENTFORGE_TRACE_REDACTION (default on)."""
+    return _flag("AGENTFORGE_TRACE_REDACTION")
+
+
+# Attributes that are identifiers, never personal data: not redacted (a hash
+# or id can contain a digit run the account-number detector would match).
+_IDENTIFIER_SUFFIXES = (".id", "_id", ".content_hash", ".version_id", ".call.id")
+
+
+def _redact_value(key: str, value: Any, found: dict[str, dict[str, int]]) -> Any:
+    if not isinstance(value, str) or key.endswith(_IDENTIFIER_SUFFIXES):
+        return value
+    text, counts = redact_pii(value)
+    if counts:
+        entry = found.setdefault(key, {})
+        for kind, n in counts.items():
+            entry[kind] = entry.get(kind, 0) + n
+    return text
+
+
+def redact_span(span: ReadableSpan) -> ReadableSpan:
+    """A copy of `span` with PII in its attributes, events and status message replaced."""
+    found: dict[str, dict[str, int]] = {}
+    attributes = {k: _redact_value(k, v, found) for k, v in (span.attributes or {}).items()}
+    events = [
+        Event(
+            e.name,
+            {k: _redact_value(f"event:{e.name}:{k}", v, found) for k, v in (e.attributes or {}).items()},
+            e.timestamp,
+        )
+        for e in span.events
+    ]
+    status = span.status
+    if status.description:
+        description = _redact_value("status", status.description, found)
+        status = Status(status.status_code, description)
+    if found:
+        attributes["agentforge.redaction.count"] = sum(n for c in found.values() for n in c.values())
+        attributes["agentforge.redacted"] = "; ".join(
+            f"{k}: " + ", ".join(f"{kind} x{n}" for kind, n in sorted(c.items())) for k, c in sorted(found.items())
+        )
+    return ReadableSpan(
+        name=span.name,
+        context=span.get_span_context(),
+        parent=span.parent,
+        resource=span.resource,
+        attributes=attributes,
+        events=events,
+        links=span.links,
+        kind=span.kind,
+        status=status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class RedactingProcessor(SpanProcessor):
+    """The one place ended spans leave the tracer: redacts each span (unless
+    redaction is off) and hands the copy to every processor behind it -- the
+    collector that stores spans in Postgres and any exporter."""
+
+    def __init__(self, inner: list[SpanProcessor], *, redact: bool) -> None:
+        self._inner = list(inner)
+        self.redact = redact
+
+    def add(self, processor: SpanProcessor) -> None:
+        self._inner.append(processor)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        out = redact_span(span) if self.redact else span
+        for processor in self._inner:
+            processor.on_end(out)
+
+    def shutdown(self) -> None:
+        for processor in self._inner:
+            processor.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return all(p.force_flush(timeout_millis) for p in self._inner)
 
 
 class SpanCollector(SpanProcessor):
@@ -68,6 +170,13 @@ class SpanCollector(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         ctx = span.get_span_context()
         if ctx is None:
+            return
+        # Only AgentForge's own spans (API, worker, agent) are ever claimed and stored.
+        # Anything else -- e.g. the spans FastAPI records for every request -- would
+        # sit here unclaimed and grow without bound, so it isn't kept (an exporter
+        # still receives it).
+        scope = span.instrumentation_scope.name if span.instrumentation_scope is not None else ""
+        if scope not in STORED_SCOPES:
             return
         with self._lock:
             self._spans.setdefault(ctx.trace_id, []).append(span)
@@ -104,29 +213,45 @@ class SpanCollector(SpanProcessor):
 
 
 def setup(service_name: str) -> SpanCollector | None:
-    """Install a TracerProvider (once per process) with the span collector
-    and, if configured, an OTLP exporter. None when tracing is off."""
-    global _collector
+    """Install a TracerProvider (once per process): the redacting processor,
+    with the span collector and, if configured, an OTLP exporter behind it.
+    None when tracing is off."""
+    global _collector, _redactor
     if not enabled():
         return None
     with _lock:
         if _collector is not None:
             return _collector
-        provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
         collector = SpanCollector()
-        provider.add_span_processor(collector)
+        redactor = RedactingProcessor([collector], redact=redaction_enabled())
         if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            redactor.add(BatchSpanProcessor(OTLPSpanExporter()))
         current = trace.get_tracer_provider()
         if isinstance(current, TracerProvider):
             # Already set in this process (e.g. by a test harness): reuse it.
-            current.add_span_processor(collector)
+            current.add_span_processor(redactor)
         else:
+            provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
+            provider.add_span_processor(redactor)
             trace.set_tracer_provider(provider)
-        _collector = collector
+        _collector, _redactor = collector, redactor
         return collector
+
+
+def add_exporter(exporter: SpanExporter) -> SpanProcessor | None:
+    """Export spans to `exporter` too, behind the redacting processor like the
+    OTLP exporter (used by tests to see exactly what an exporter receives)."""
+    if _redactor is None:
+        return None
+    processor = SimpleSpanProcessor(exporter)
+    _redactor.add(processor)
+    return processor
+
+
+def redactor() -> RedactingProcessor | None:
+    return _redactor
 
 
 def collector() -> SpanCollector | None:

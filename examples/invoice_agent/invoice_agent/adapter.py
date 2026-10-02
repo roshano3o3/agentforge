@@ -4,6 +4,7 @@
   CI release gate evaluates this one, at the base branch and at the PR.
 * `answer_v1` / `answer_v2` -- fixed presets (reference, and the regressed
   refactor), independent of config.py, for tests and side-by-side runs.
+* `answer_v1_without_d2` -- v1 with only defense D2 off (demo PR #4's config).
 
 Each runs the LangGraph agent on one test-case input and reports its
 trajectory from the graph's own message history: every tool call (name,
@@ -35,7 +36,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from agentforge_sdk import AdapterOutput, Step
-from invoice_agent.agent import V1, V2, Behavior, build_graph, completed_calls
+from invoice_agent.agent import V1, V1_WITHOUT_D2, V2, Behavior, build_graph, completed_calls
 from invoice_agent.config import BEHAVIOR
 from invoice_agent.trace_recorder import Recorder, recording
 
@@ -82,3 +83,8 @@ def answer_v1(input_text: str, scenario: Mapping[str, Any] | None = None) -> Ada
 
 def answer_v2(input_text: str, scenario: Mapping[str, Any] | None = None) -> AdapterOutput:
     return _run(V2, input_text, scenario)
+
+
+def answer_v1_without_d2(input_text: str, scenario: Mapping[str, Any] | None = None) -> AdapterOutput:
+    """v1 with only defense D2 off (demo PR #4's configuration)."""
+    return _run(V1_WITHOUT_D2, input_text, scenario)

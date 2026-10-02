@@ -13,6 +13,7 @@ import type {
   RunCreateInput,
   SafetyBlock,
   Scenario,
+  Trace,
   TrajectoryExpectations,
 } from "./types";
 
@@ -188,4 +189,9 @@ export function getRegression(baselineRunId: string, candidateRunId: string): Pr
 /** Decisions are made by `agentforge gate` (API-computed, immutable); the UI only reads them. */
 export function listReleaseDecisions(candidateRunId: string): Promise<ReleaseDecision[]> {
   return apiFetch<ReleaseDecision[]>(`/release-decisions?${new URLSearchParams({ candidate_run_id: candidateRunId })}`);
+}
+
+/** A case's span tree; `resultId` is the case's result id in its run (results[].id). */
+export function getTrace(resultId: string): Promise<Trace> {
+  return apiFetch<Trace>(`/traces/${encodeURIComponent(resultId)}`);
 }

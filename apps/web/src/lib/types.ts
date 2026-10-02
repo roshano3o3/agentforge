@@ -306,3 +306,31 @@ export interface ReleaseDecision {
   regression: RegressionReport;
   created_at: string;
 }
+
+// GET /traces/{result_id}: one evaluated case's stored span tree (PII redacted
+// unless the server was told otherwise).
+export interface TraceSpan {
+  span_id: string;
+  parent_span_id: string | null;
+  name: string;
+  kind: string;
+  service: string;
+  start_time: string;
+  end_time: string;
+  duration_ms: number;
+  attributes: Record<string, unknown>;
+  status_code: "UNSET" | "OK" | "ERROR";
+  status_message: string | null;
+  events: { name: string; time: string; attributes: Record<string, unknown> }[];
+  step_index: number | null;
+  children: TraceSpan[];
+}
+
+export interface Trace {
+  result_id: string;
+  case_key: string;
+  run_id: string;
+  trace_id: string;
+  span_count: number;
+  spans: TraceSpan[];
+}
