@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.application import Application
+from agentforge_api.models.dataset import DatasetVersion
 from agentforge_api.models.release import Baseline, ReleaseDecision
 from agentforge_api.services import release as release_service
 from agentforge_core.schemas import (
@@ -34,17 +35,26 @@ router = APIRouter(tags=["release"])
 
 @router.put("/baselines", response_model=BaselineOut)
 async def set_baseline(payload: BaselineSet, session: AsyncSession = Depends(get_session)) -> BaselineOut:
-    """Point (the run's application, environment) at a completed run. A
-    metadata write: the pointer row is created or re-pointed; nothing else
-    changes."""
+    """Point (the run's application, environment, the run's dataset) at a
+    completed run. A metadata write: the pointer row is created or re-pointed;
+    nothing else changes, and other datasets' pointers are untouched."""
     run = await release_service.completed_run(session, payload.run_id, "baseline")
+    dataset_version = await session.get(DatasetVersion, run.dataset_version_id)
+    assert dataset_version is not None
     row = await session.scalar(
         select(Baseline).where(
-            Baseline.application_id == run.application_id, Baseline.environment == payload.environment
+            Baseline.application_id == run.application_id,
+            Baseline.environment == payload.environment,
+            Baseline.dataset_id == dataset_version.dataset_id,
         )
     )
     if row is None:
-        row = Baseline(application_id=run.application_id, environment=payload.environment, run_id=run.id)
+        row = Baseline(
+            application_id=run.application_id,
+            environment=payload.environment,
+            dataset_id=dataset_version.dataset_id,
+            run_id=run.id,
+        )
         session.add(row)
     else:
         row.run_id = run.id
@@ -64,7 +74,7 @@ async def list_baselines(
         query = query.where(Application.name == application)
     if environment is not None:
         query = query.where(Baseline.environment == environment)
-    rows = await session.scalars(query.order_by(Application.name, Baseline.environment))
+    rows = await session.scalars(query.order_by(Application.name, Baseline.environment, Baseline.dataset_id))
     return [await release_service.baseline_out(session, row) for row in rows]
 
 

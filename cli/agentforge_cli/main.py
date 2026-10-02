@@ -473,7 +473,7 @@ def baseline_set(
     env: str = typer.Option(..., "--env", help="Environment name, e.g. production."),
     api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
 ) -> None:
-    """Point (the run's application, ENV) at RUN_ID. Only the pointer changes."""
+    """Point (the run's application, ENV, the run's dataset) at RUN_ID. Only the pointer changes."""
     with AgentForgeClient(base_url=api_url) as client:
         try:
             row = client.set_baseline(run_id, env)

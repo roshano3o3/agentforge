@@ -54,7 +54,7 @@ test("baselines and regression: pointer, deltas with markers, case classes, the 
   // -- Baselines: the current pointer per environment ------------------------------
   await page.goto("/baselines");
   await expect(page.getByRole("heading", { name: "Baselines" })).toBeVisible();
-  const row = page.locator(`tr[data-baseline="${APP_NAME}:production"]`);
+  const row = page.locator(`tr[data-baseline="${APP_NAME}:production:invoice-agent"]`);
   await expect(row).toBeVisible();
   await expect(row).toContainText("v1");
   await expect(row).toContainText("100%");

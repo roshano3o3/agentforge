@@ -10,18 +10,24 @@ from agentforge_api.models._shared import new_id, utcnow
 
 
 class Baseline(Base):
-    """A pointer: (application, environment) -> one completed run. Setting a
-    baseline updates this row's `run_id` and nothing else -- no result, score
-    or step is copied. The DB refuses a pointer to a run that isn't completed
-    or belongs to another application (trigger in the `release_gate`
-    migration)."""
+    """A pointer: (application, environment, dataset) -> one completed run of
+    that dataset, so `production` can name a different run per dataset (e.g.
+    the trajectory dataset and the safety dataset). The dataset is always the
+    run's own. Setting a baseline updates this row's `run_id` and nothing
+    else -- no result, score or step is copied. The DB refuses a pointer to a
+    run that isn't completed, belongs to another application, or is of
+    another dataset (triggers in the `release_gate` and `baselines_per_dataset`
+    migrations)."""
 
     __tablename__ = "baselines"
-    __table_args__ = (UniqueConstraint("application_id", "environment", name="uq_baseline_app_env"),)
+    __table_args__ = (
+        UniqueConstraint("application_id", "environment", "dataset_id", name="uq_baseline_app_env_dataset"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     application_id: Mapped[str] = mapped_column(String(36), ForeignKey("applications.id"), nullable=False)
     environment: Mapped[str] = mapped_column(String(50), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(36), ForeignKey("datasets.id"), nullable=False)
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("evaluation_runs.id"), nullable=False)
     set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
