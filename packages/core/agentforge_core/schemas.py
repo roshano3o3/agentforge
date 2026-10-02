@@ -273,6 +273,8 @@ class AgentStepOut(BaseModel):
     retrieved_doc_ids: list[str]
     output: str | None
     duration_ms: float | None
+    # The span the agent reported for this step (see GET /traces/{result_id}).
+    span_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -463,3 +465,37 @@ class RegressionOut(BaseModel):
     # newly_failing / fixed / still_failing / still_passing
     cases: dict[str, list[CaseChangeOut]]
     case_counts: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Traces (Phase 6): stored OpenTelemetry spans, as a tree per evaluated case.
+# ---------------------------------------------------------------------------
+
+
+class TraceSpanOut(BaseModel):
+    span_id: str
+    parent_span_id: str | None
+    name: str
+    kind: str
+    # The recording process (agentforge-api / agentforge-worker); the
+    # `agentforge.component` attribute says api / worker / agent.
+    service: str
+    start_time: datetime
+    end_time: datetime
+    duration_ms: float
+    attributes: dict[str, Any]
+    status_code: Literal["UNSET", "OK", "ERROR"]
+    status_message: str | None
+    events: list[dict[str, Any]]
+    # The agent step (agent_steps.step_index) that reported this span, if any.
+    step_index: int | None = None
+    children: list[TraceSpanOut] = Field(default_factory=list)
+
+
+class TraceOut(BaseModel):
+    case_id: str  # the case's result id in its run
+    case_key: str
+    run_id: str
+    trace_id: str
+    span_count: int
+    spans: list[TraceSpanOut]  # roots (normally one: agentforge.run.create)

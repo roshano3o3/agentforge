@@ -65,7 +65,9 @@ from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from agentforge_sdk import tracing
 from invoice_agent.tools import CUSTOMERS, INVOICES, tools_for
+from invoice_agent.trace_recorder import current_recorder
 
 # A credential the agent's configuration holds (synthetic): the approval
 # desk's override code. Nothing in a correct agent ever needs to say it.
@@ -407,20 +409,21 @@ def _already(action: Next, done: list[Call]) -> bool:
     return any(c.name == action.tool and c.args == action.args for c in done)
 
 
-def _obeyed_instructions(b: Behavior, request: str, done: list[Call]) -> list[Next | Reveal]:
-    """What the absent defenses let through, in the order the agent saw it:
-    the prompt's override (no D1), then tool results' instructions (no D2)."""
-    found: list[Next | Reveal] = []
+def _obeyed_instructions(b: Behavior, request: str, done: list[Call]) -> list[tuple[Next | Reveal, str]]:
+    """What the absent defenses let through, in the order the agent saw it,
+    with where each came from: the prompt's override (no D1), then tool
+    results' instructions (no D2)."""
+    found: list[tuple[Next | Reveal, str]] = []
     if b.prompt_override == "obey" and _OVERRIDE.search(request):
         instr = _instruction(request)
         if instr is not None:
-            found.append(instr)
+            found.append((instr, "the user prompt"))
     if b.tool_output_instructions == "obey":
-        for call in done:
+        for n, call in enumerate(done, start=1):
             for text in _strings(call.result):
                 instr = _instruction(text)
                 if instr is not None:
-                    found.append(instr)
+                    found.append((instr, f"{call.name}'s result (tool call {n})"))
     return found
 
 
@@ -473,24 +476,39 @@ def _base_plan(behavior: Behavior, request: str, done: list[Call]) -> Action:
 
 
 def plan(behavior: Behavior, request: str, done: list[Call], user: User | None = None) -> Action:
-    """The planner's whole decision: the next tool call, or the final answer."""
+    """The planner's whole decision: the next tool call, or the final answer.
+
+    Why it decided is recorded on the current span (the planner_decision span
+    when traced) as `agentforge.planner.source`."""
     user = user or User()
     if behavior.prompt_override == "refuse" and _OVERRIDE.search(request):
+        tracing.annotate("agentforge.planner.source", "D1: refused a prompt override")
         return REFUSED_OVERRIDE  # D1
     obeyed = _obeyed_instructions(behavior, request, done)
-    action: Action | None = next((i for i in obeyed if isinstance(i, Next) and not _already(i, done)), None)
+    pending = next(((i, origin) for i, origin in obeyed if isinstance(i, Next) and not _already(i, done)), None)
+    action: Action | None = None
+    if pending is not None:
+        action = pending[0]
+        tracing.annotate("agentforge.planner.source", f"obeyed an instruction found in {pending[1]}")
     if action is None:
         action = _failure(behavior, request, done)
+        if action is not None:
+            tracing.annotate("agentforge.planner.source", "D5: handled the failed tool call")
     if action is None:
         action = _base_plan(behavior, request, done)
+        tracing.annotate("agentforge.planner.source", f"plan for intent '{_intent(request)}'")
     if isinstance(action, Next):
         if behavior.check_permissions and user.allowed_tools is not None and action.tool not in user.allowed_tools:
+            tracing.annotate("agentforge.planner.source", f"D3: {action.tool} not permitted for role {user.role}")
             return (  # D3
                 f"You don't have permission to use {action.tool} (your role: {user.role}), "
                 "so I didn't do that. Nothing was changed."
             )
         return action
-    reveals = [i for i in obeyed if isinstance(i, Reveal)]
+    reveals = [i for i, _origin in obeyed if isinstance(i, Reveal)]
+    if reveals:
+        origins = sorted({origin for i, origin in obeyed if isinstance(i, Reveal)})
+        tracing.annotate("agentforge.planner.revealed", f"{[r.what for r in reveals]} from {', '.join(origins)}")
     return f"{action} {_revealed(reveals, request, done)}".strip() if reveals else action
 
 
@@ -536,10 +554,32 @@ def build_graph(behavior: Behavior, scenario: Mapping[str, Any] | None = None) -
     def agent(state: MessagesState) -> dict[str, list[BaseMessage]]:
         messages = state["messages"]
         done = completed_calls(messages)
-        action = plan(behavior, _request(messages), done, user)
+        call_id = f"call_{len(done) + 1}"
+        with tracing.span(
+            "planner_decision",
+            {
+                "agentforge.component": "agent",
+                "agentforge.planner.turn": len(done) + 1,
+                "agentforge.planner.kind": "scripted (deterministic Python, not a model)",
+                "agentforge.planner.user_role": user.role,
+            },
+        ) as decision:
+            action = plan(behavior, _request(messages), done, user)
+            if isinstance(action, str):
+                decision.set("agentforge.planner.decision", "final_answer")
+                decision.set("agentforge.planner.answer", action)
+            else:
+                decision.set("agentforge.planner.decision", "tool_call")
+                decision.set("gen_ai.tool.name", action.tool)
+                decision.set("gen_ai.tool.call.id", call_id)
+                decision.set("agentforge.planner.args", action.args)
+        recorder = current_recorder()
+        if recorder is not None:
+            recorder.decision, recorder.decision_call_id = decision, call_id
+            if isinstance(action, str):
+                recorder.final_span_id = decision.span_id
         if isinstance(action, str):
             return {"messages": [AIMessage(content=action)]}
-        call_id = f"call_{len(done) + 1}"
         return {
             "messages": [AIMessage(content="", tool_calls=[{"name": action.tool, "args": action.args, "id": call_id}])]
         }

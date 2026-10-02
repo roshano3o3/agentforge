@@ -3,10 +3,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from agentforge_api import tracing
 from agentforge_api.config import get_settings
-from agentforge_api.routers import applications, datasets, evaluators, release, runs
+from agentforge_api.routers import applications, datasets, evaluators, release, runs, traces
 
 settings = get_settings()
+tracing.setup("agentforge-api")
 
 app = FastAPI(
     title="AgentForge API",
@@ -29,6 +31,7 @@ app.include_router(datasets.router)
 app.include_router(evaluators.router)
 app.include_router(runs.router)
 app.include_router(release.router)
+app.include_router(traces.router)
 
 
 @app.get("/health")

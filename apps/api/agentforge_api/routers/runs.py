@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agentforge_api import tracing
 from agentforge_api.db.base import get_session
 from agentforge_api.models.application import Application, ApplicationVersion
 from agentforge_api.models.dataset import DatasetVersion, DatasetVersionStatus, TestCase
 from agentforge_api.models.evaluation import EvaluationRun, RunStatus
+from agentforge_api.models.trace import TraceSpan
 from agentforge_api.queue import QueueUnavailableError, RunQueue, get_run_queue
 from agentforge_api.services import runs as run_service
 from agentforge_core.schemas import EvaluationRunCreate, EvaluationRunOut, EvaluationRunSummaryOut
@@ -83,26 +86,60 @@ async def create_run(
             ),
         )
 
-    run = EvaluationRun(
-        application_id=application.id,
-        application_version_id=app_version.id,
-        dataset_version_id=dataset_version.id,
-        provider_type=payload.provider_type,
-        evaluators=await _pin_evaluators(payload.evaluators, dataset_version, session),
-        adapter_type=payload.adapter.type,
-        adapter_target=payload.adapter.target,
-        timeout_seconds=payload.timeout_seconds,
-        max_latency_ms=payload.max_latency_ms,
-        environment=payload.environment,
-        threshold=payload.threshold,
-        git_commit_sha=payload.git_commit_sha,
-        status=RunStatus.pending,
+    # The trace starts here: this span is the root, and its context goes to
+    # the worker with the job. It's stored with the run, in the same commit.
+    span = tracing.tracer().start_span(
+        "agentforge.run.create",
+        attributes=tracing.attrs(
+            {
+                "agentforge.component": "api",
+                "agentforge.application.name": application.name,
+                "agentforge.application.version": app_version.version,
+                "agentforge.dataset.version_id": dataset_version.id,
+                "agentforge.adapter.type": payload.adapter.type,
+                "agentforge.adapter.target": payload.adapter.target,
+                "agentforge.run.provider_type": payload.provider_type,
+            }
+        ),
     )
-    session.add(run)
+    try:
+        run = EvaluationRun(
+            application_id=application.id,
+            application_version_id=app_version.id,
+            dataset_version_id=dataset_version.id,
+            provider_type=payload.provider_type,
+            evaluators=await _pin_evaluators(payload.evaluators, dataset_version, session),
+            adapter_type=payload.adapter.type,
+            adapter_target=payload.adapter.target,
+            timeout_seconds=payload.timeout_seconds,
+            max_latency_ms=payload.max_latency_ms,
+            environment=payload.environment,
+            threshold=payload.threshold,
+            git_commit_sha=payload.git_commit_sha,
+            status=RunStatus.pending,
+        )
+        session.add(run)
+        await session.flush()
+        span.set_attributes({"agentforge.run.id": run.id, "agentforge.run.evaluators": len(run.evaluators)})
+    except BaseException as exc:
+        tracing.error(span, f"{type(exc).__name__}: {exc}", exc)
+        raise
+    finally:
+        span.end()
+        collector = tracing.collector()
+        claimed = (
+            collector.take_subtree(span.get_span_context().trace_id, span.get_span_context().span_id)
+            if collector is not None and span.get_span_context().is_valid
+            else []
+        )
+        if collector is not None and span.get_span_context().is_valid:
+            collector.discard(span.get_span_context().trace_id)
+    for s in claimed:
+        session.add(TraceSpan(run_id=run.id, evaluation_result_id=None, **tracing.row_values(s)))
     await session.commit()
 
     try:
-        await queue.enqueue_run(run.id)
+        await queue.enqueue_run(run.id, tracing.inject(trace.set_span_in_context(span)))
     except QueueUnavailableError as exc:
         # Never leave a run pending forever with no job behind it.
         run_service.transition(run, RunStatus.failed, error_message=f"not executed: {exc}")

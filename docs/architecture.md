@@ -1,4 +1,4 @@
-# Architecture — through Phase 5 (evaluation engine, trajectories, release gate, adversarial & safety testing)
+# Architecture — through Phase 6 part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -109,6 +109,9 @@ erDiagram
     Application ||--o{ Baseline : "one per environment"
     Baseline }o--|| EvaluationRun : "points to (completed)"
     EvaluationRun ||--o{ ReleaseDecision : "candidate / baseline"
+    EvaluationRun ||--o{ TraceSpan : "run-level spans"
+    EvaluationResult ||--o{ TraceSpan : "the case's span tree"
+    AgentStep }o--o| TraceSpan : "span_id (agent-reported)"
 ```
 
 - `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
@@ -197,7 +200,8 @@ Its planner is scripted Python, not a model.
 | Its results / metric scores never change | `assert_accepts_results()`; no client write route at all | triggers block INSERT/UPDATE/DELETE on `evaluation_results` and `metric_scores` |
 | Its agent steps never change | written only by the worker, with the result | trigger blocks INSERT/UPDATE/DELETE on `agent_steps` (migration `e8b4c2d61a9f`) |
 | A release decision never changes | no update/delete route | trigger blocks every UPDATE/DELETE on `release_decisions` (migration `f3c7a9e2b510`) |
-| A baseline points to a completed run of its own application | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` |
+| A baseline points to a completed run of its own application and dataset | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` (dataset check: migration `b9e4f1c27d36`) |
+| A finished run's spans never change | written only by the API (run creation) and the worker, while the run is pending/running | trigger blocks INSERT/UPDATE/DELETE on `trace_spans` (migration `c3d7e2a94b18`) |
 | A published case's trajectory expectations never change | `PATCH` → `409` | the published-`test_cases` trigger covers every column, `trajectory` included |
 
 Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
@@ -213,6 +217,42 @@ score/evidence becomes a `heuristic_context_precision@1.0.0` metric row
 stuck in `running` (the CLI died mid-run) is marked failed, since no worker
 will ever pick it up. Phase 1 runs have no stored aggregates, so the API
 computes them on read with the same function the worker uses.
+
+## Tracing (Phase 6 part A)
+
+`agentforge_api/tracing.py` sets up one OpenTelemetry `TracerProvider` per
+process (API: `agentforge-api`, worker: `agentforge-worker`) with a
+`SpanCollector` span processor, plus an OTLP/HTTP `BatchSpanProcessor` only
+if `OTEL_EXPORTER_OTLP_ENDPOINT` is set. `AGENTFORGE_TRACING=off` skips all
+of it.
+
+```
+POST /runs        start span agentforge.run.create; insert the run; end the span;
+                  store it (trace_spans, no result id) in the same commit as the run;
+                  enqueue the job with its W3C carrier ({"traceparent": ...})
+worker job        extract the carrier; start agentforge.run as its child
+  per case        agentforge.case
+                    invoke_agent        current while the adapter runs:
+                                        - sync python adapter: its daemon thread runs in
+                                          contextvars.copy_context() of the caller
+                                        - http adapter: traceparent header injected
+                                        - the agent's own spans (agentforge_sdk.tracing)
+                                          become children; LangGraph's executor threads
+                                          inherit the context too
+                    evaluate <name>     one per evaluator
+                  case span ends -> collector.take_subtree(case span) -> rows written
+                  with the case's result (same transaction as result, scores, steps)
+  end of run      run span ends -> its rows flushed before the final status change
+                  (the trigger refuses span writes once completed/failed); anything
+                  still buffered for the trace is discarded (e.g. a timed-out
+                  adapter thread's late spans)
+```
+
+`GET /traces/{case_id}` (`case_id` = the case's result id in a run) loads
+the case's spans and the run-level spans of the same trace and returns them
+as a tree, each span marked with the agent step that reported it
+(`agent_steps.span_id`). Nothing in the tree is computed from steps; spans
+inside an HTTP agent are never collected.
 
 ## Reproducibility metadata recorded per run
 
@@ -373,7 +413,5 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Replay, trace/span persistence (trajectories are
-what the adapter reports, not instrumented traces), model comparison,
-LLM-as-judge evaluators, the Trace Explorer page,
-authentication. See the root README.
+Replay, a dashboard view of traces (Trace Explorer), model comparison,
+LLM-as-judge evaluators, authentication. See the root README.

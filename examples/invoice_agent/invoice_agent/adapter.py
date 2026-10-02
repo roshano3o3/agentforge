@@ -18,6 +18,11 @@ graph doesn't measure them, and AgentForge doesn't invent them.
 environment -- mock tool failures, extra fields in a tool's result, the
 session user -- and is applied to the tools and the session only. The
 planner never reads it.
+
+With OpenTelemetry installed, each planner turn and each tool call is a span
+(see agent.py / tools.py); each reported step carries the id of its span:
+a tool call its `execute_tool` span, the final answer the decision that
+produced it.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from langgraph.graph.state import CompiledStateGraph
 from agentforge_sdk import AdapterOutput, Step
 from invoice_agent.agent import V1, V2, Behavior, build_graph, completed_calls
 from invoice_agent.config import BEHAVIOR
+from invoice_agent.trace_recorder import Recorder, recording
 
 # Generous for these flows (at most ~8 graph steps); a policy that loops
 # forever fails the case with GraphRecursionError instead of hanging.
@@ -43,21 +49,26 @@ def _graph(behavior: Behavior) -> CompiledStateGraph:
     return build_graph(behavior)
 
 
-def _steps(messages: Sequence[BaseMessage]) -> tuple[list[Step], str]:
+def _steps(messages: Sequence[BaseMessage], recorder: Recorder) -> tuple[list[Step], str]:
+    calls = completed_calls(messages)
+    span_ids = recorder.tool_span_ids if len(recorder.tool_span_ids) == len(calls) else [None] * len(calls)
     steps = [
-        Step(kind="tool_call", name=c.name, args=c.args, result=c.result, error=c.error)
-        for c in completed_calls(messages)
+        Step(kind="tool_call", name=c.name, args=c.args, result=c.result, error=c.error, span_id=span_id)
+        for c, span_id in zip(calls, span_ids, strict=True)
     ]
     final = messages[-1]
     answer = str(final.content) if isinstance(final, AIMessage) and not final.tool_calls else ""
-    steps.append(Step(kind="final_answer", output=answer))
+    steps.append(Step(kind="final_answer", output=answer, span_id=recorder.final_span_id))
     return steps, answer
 
 
 def _run(behavior: Behavior, input_text: str, scenario: Mapping[str, Any] | None) -> AdapterOutput:
     graph = _graph(behavior) if scenario is None else build_graph(behavior, scenario)
-    state = graph.invoke({"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT})
-    steps, answer = _steps(state["messages"])
+    with recording() as recorder:
+        state = graph.invoke(
+            {"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT}
+        )
+    steps, answer = _steps(state["messages"], recorder)
     return AdapterOutput(answer=answer, steps=steps)
 
 

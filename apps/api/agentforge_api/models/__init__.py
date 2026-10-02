@@ -9,6 +9,7 @@ from agentforge_api.models.evaluation import (
     RunStatus,
 )
 from agentforge_api.models.release import Baseline, ReleaseDecision
+from agentforge_api.models.trace import TraceSpan
 
 __all__ = [
     "Baseline",
@@ -24,4 +25,5 @@ __all__ = [
     "MetricScore",
     "RunStatus",
     "ResultStatus",
+    "TraceSpan",
 ]

@@ -20,17 +20,24 @@ argument to a python adapter that declares one, and as a "scenario" field
 in an http adapter's request body. A python adapter that doesn't declare it
 can't run such a case: the case is recorded as an error rather than run
 without its setup, which would quietly test something else.
+
+Trace context: a sync python adapter's daemon thread runs in a copy of the
+caller's context, so spans the agent opens (agentforge_sdk.tracing) are
+children of the worker's `invoke_agent` span; an http adapter receives a W3C
+`traceparent` header (and `tracestate`, if any) for that span.
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import dataclasses
 import importlib
 import inspect
 import json
 import math
+import re
 import threading
 import time
 import traceback
@@ -39,6 +46,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from opentelemetry import propagate
 
 from agentforge_sdk import AdapterOutput, Step
 
@@ -103,7 +111,8 @@ def _string_list(data: dict[str, Any], key: str) -> list[str]:
 
 
 _STEP_KINDS = ("retrieval", "tool_call", "final_answer")
-_STEP_KEYS = {"kind", "name", "args", "result", "error", "retrieved_doc_ids", "output", "duration_ms"}
+_STEP_KEYS = {"kind", "name", "args", "result", "error", "retrieved_doc_ids", "output", "duration_ms", "span_id"}
+_SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _json_value(where: str, value: Any) -> Any:
@@ -153,6 +162,9 @@ def _steps(data: dict[str, Any]) -> list[Step]:
             or not math.isfinite(duration)
         ):
             raise AdapterOutputError(f"{where}.duration_ms must be a non-negative number or null")
+        span_id = item.get("span_id")
+        if span_id is not None and (not isinstance(span_id, str) or not _SPAN_ID.match(span_id)):
+            raise AdapterOutputError(f"{where}.span_id must be 16 lowercase hex characters or null")
         steps.append(
             Step(
                 kind=kind,
@@ -163,6 +175,7 @@ def _steps(data: dict[str, Any]) -> list[Step]:
                 retrieved_doc_ids=_string_list(item, "retrieved_doc_ids"),
                 output=output,
                 duration_ms=float(duration) if duration is not None else None,
+                span_id=span_id,
             )
         )
     return steps
@@ -187,13 +200,16 @@ def _describe(exc: BaseException) -> tuple[str, str]:
 
 def _call_in_daemon_thread(fn: Callable[[], Any]) -> concurrent.futures.Future:
     future: concurrent.futures.Future = concurrent.futures.Future()
+    # A new thread starts with an empty context; carry the caller's (the
+    # current span, among others) into it.
+    ctx = contextvars.copy_context()
 
     def target() -> None:
         start = time.perf_counter()
         error: BaseException | None = None
         result: Any = None
         try:
-            result = fn()
+            result = ctx.run(fn)
         except BaseException as exc:  # noqa: BLE001 - includes SystemExit; reported, never re-raised here
             error = exc
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -260,7 +276,11 @@ class HttpAdapter:
         body: dict[str, Any] = {"input": input_text, "case_key": case_key}
         if scenario is not None:
             body["scenario"] = scenario
-        response = await asyncio.wait_for(self._client.post(self._url, json=body, timeout=timeout), timeout)
+        headers: dict[str, str] = {}
+        propagate.inject(headers)  # traceparent for the current (invoke_agent) span; nothing if not tracing
+        response = await asyncio.wait_for(
+            self._client.post(self._url, json=body, headers=headers, timeout=timeout), timeout
+        )
         if response.status_code // 100 != 2:
             raise AdapterOutputError(f"HTTP adapter returned {response.status_code}: {response.text[:500]}")
         try:

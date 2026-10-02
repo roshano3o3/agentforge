@@ -22,7 +22,9 @@ class QueueUnavailableError(RuntimeError):
 
 
 class RunQueue(Protocol):
-    async def enqueue_run(self, run_id: str) -> None: ...
+    # trace_context: the W3C carrier ({"traceparent": ...}) of the API's
+    # run-creation span, so the worker's spans continue that trace.
+    async def enqueue_run(self, run_id: str, trace_context: dict[str, str] | None = None) -> None: ...
 
 
 class ArqRunQueue:
@@ -32,12 +34,12 @@ class ArqRunQueue:
         self._settings = dataclasses.replace(RedisSettings.from_dsn(redis_url), conn_retries=0, conn_timeout=2)
         self._pool: ArqRedis | None = None
 
-    async def enqueue_run(self, run_id: str) -> None:
+    async def enqueue_run(self, run_id: str, trace_context: dict[str, str] | None = None) -> None:
         try:
             if self._pool is None:
                 self._pool = await create_pool(self._settings, retry=0)
             # _job_id = run id: enqueueing the same run twice is a no-op.
-            job = await self._pool.enqueue_job(EXECUTE_RUN_JOB, run_id, _job_id=f"run:{run_id}")
+            job = await self._pool.enqueue_job(EXECUTE_RUN_JOB, run_id, trace_context or None, _job_id=f"run:{run_id}")
         except Exception as exc:  # noqa: BLE001 - any Redis/connection failure
             self._pool = None
             raise QueueUnavailableError(

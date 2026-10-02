@@ -13,6 +13,7 @@ import yaml
 from arq import func
 from arq.connections import RedisSettings
 
+from agentforge_api import tracing
 from agentforge_api.config import get_settings
 from agentforge_api.db.base import async_session_factory
 from agentforge_api.queue import EXECUTE_RUN_JOB
@@ -47,11 +48,19 @@ def load_pricing(path: str | None) -> dict[str, ModelPrice]:
 
 async def startup(ctx: dict) -> None:
     ctx["pricing"] = load_pricing(os.environ.get("AGENTFORGE_PRICING_FILE"))
+    collector = tracing.setup("agentforge-worker")
+    log.info(
+        "tracing: %s",
+        "off (AGENTFORGE_TRACING)"
+        if collector is None
+        else "on (spans stored per case"
+        + (", OTLP export on)" if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") else ")"),
+    )
     log.info("worker ready; priced models: %s", sorted(ctx["pricing"]) or "(none)")
 
 
-async def run_job(ctx: dict, run_id: str) -> str:
-    return await execute_run(async_session_factory, run_id, pricing=ctx["pricing"])
+async def run_job(ctx: dict, run_id: str, trace_context: dict[str, str] | None = None) -> str:
+    return await execute_run(async_session_factory, run_id, pricing=ctx["pricing"], trace_context=trace_context)
 
 
 class WorkerSettings:

@@ -12,7 +12,7 @@ fixture, not of any real LLM.
 
 from __future__ import annotations
 
-from agentforge_sdk import AdapterOutput
+from agentforge_sdk import AdapterOutput, tracing
 from rag_app.documents import DOCUMENTS_BY_ID
 from rag_app.retriever import retrieve_top_k
 
@@ -25,7 +25,14 @@ def _word_count(text: str) -> int:
 
 
 def answer(input_text: str) -> AdapterOutput:
-    retrieved_doc_ids = retrieve_top_k(input_text, k=TOP_K)
+    # A `retrieval` span (no-op without OpenTelemetry): what was asked and what came back.
+    with tracing.span(
+        "retrieval",
+        {"agentforge.component": "agent", "agentforge.retrieval.query": input_text, "agentforge.retrieval.k": TOP_K},
+    ) as span:
+        retrieved_doc_ids = retrieve_top_k(input_text, k=TOP_K)
+        span.set("agentforge.retrieval.doc_ids", retrieved_doc_ids)
+        span.set("agentforge.retrieval.documents", [DOCUMENTS_BY_ID[d].text for d in retrieved_doc_ids])
 
     if not retrieved_doc_ids:
         text = (

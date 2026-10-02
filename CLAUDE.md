@@ -57,7 +57,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-01, Phase 5 done)
+## Current status (2026-10-02, Phase 6A in review)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -107,6 +107,22 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   v2 81/226. `/safety` dashboard page. Demo PR #4 (D2 off only, never merge): trajectory PASSED 8/8, safety
   FAILED 9/11 (injection_indirect 0.2 < 0.8; injection drop 0.4). Tests: SQLite 248 + 17 skipped; Postgres 265;
   Playwright 8. Branch `phase5-safety` == main at the merge.
+- **Pre-Phase-6 (on main, 2026-10-02)**: baselines keyed by (application, environment, dataset), migration
+  `b9e4f1c27d36`; CI sets `production` per dataset. Gate workflow now checks out the base branch by ref
+  (`pull_request.base.sha` is stale: PRs #2/#3 gated against b9f5a10 and skipped safety until fixed in f869f87).
+  Re-run: PR #2 PASSED (trajectory 8/8, safety 11/11), PR #3 FAILED (trajectory 3/8, safety 4/11).
+- **Phase 6 part A on `phase6-otel`**: `agentforge_api/tracing.py` (provider + SpanCollector, OTLP only if
+  OTEL_EXPORTER_OTLP_ENDPOINT, AGENTFORGE_TRACING=off), `trace_spans` + `agent_steps.span_id` (migration
+  `c3d7e2a94b18`, immutability triggers), job carries the API span's traceparent, HTTP adapter sends it,
+  `agentforge_sdk.tracing` (optional OTel) used by the invoice agent (planner_decision / execute_tool spans,
+  `agentforge.planner.source`) and rag_app (retrieval). `GET /traces/{result_id}`. Jaeger: compose profile
+  `tracing`. Overhead (Docker, v1, export off, medians excl. cold start): 10 cases 215 -> 265 ms, 35 cases
+  744 -> 1058 ms (+5 / +9 ms per case, mostly span-row inserts). Tests: SQLite 259 + 19 skipped; Postgres 278;
+  Playwright 8.
+- The API image must install packages/sdk (agentforge_api.tracing imports agentforge_sdk.tracing); the venv
+  has everything, so only a Docker run catches a missing package in an image.
+- Never invent spans from steps; agent spans come only from the agent. Span attributes store content (tool
+  results incl. PII), cut at 16k chars.
 - The new-run form shows one checkbox per registered evaluator: adding one changes run-flow.spec.ts's count.
 - Writing big Python patches through a bash heredoc breaks on quotes/`\n`: write the script to the scratchpad instead.
 - Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
@@ -120,7 +136,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: gate workflow, Regression/Baselines pages, demo PRs #2 (v1, PASSED) and #3 (v2, FAILED) left open)
 5. Safety / adversarial testing — **done** (A: generator, safety evaluators, per-category results;
    B: safety_policy in the CI gate, stress dataset, Safety dashboard page, demo PR #4)
-6. OpenTelemetry tracing, Trace Explorer
+6. OpenTelemetry tracing, Trace Explorer — part A (instrumentation, propagation, storage, export, API) **done** on
+   branch `phase6-otel`, in review; part B: Trace Explorer page
 7. Failure replay
 Then: remaining dashboard pages, reproducible benchmark.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,

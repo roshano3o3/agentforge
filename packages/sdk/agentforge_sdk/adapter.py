@@ -64,7 +64,9 @@ class Step:
     * ``final_answer``: ``output`` is the answer text.
 
     ``duration_ms`` is optional and, like everything here, only ever reported
-    by the agent -- AgentForge doesn't invent timings.
+    by the agent -- AgentForge doesn't invent timings. So is ``span_id``: the
+    16-hex-digit id of the span the agent opened for this step (see
+    agentforge_sdk.tracing), which links the stored step to its span.
     """
 
     kind: StepKind
@@ -75,6 +77,7 @@ class Step:
     retrieved_doc_ids: list[str] = field(default_factory=list)
     output: str | None = None
     duration_ms: float | None = None
+    span_id: str | None = None
 
 
 @dataclass

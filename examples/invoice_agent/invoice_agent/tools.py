@@ -18,6 +18,10 @@ must not repeat.
 `tools_for(scenario)` applies a test case's scenario (agentforge_core.scenario):
 a tool can be made to fail with a given error, or to return extra fields
 merged into its normal result (e.g. a memo carrying an injected instruction).
+
+Every tool is also wrapped to open an `execute_tool <name>` span
+(agentforge_sdk.tracing; a no-op without OpenTelemetry), parented to the
+planner decision that chose the call, with its args and its result or error.
 """
 
 from __future__ import annotations
@@ -26,6 +30,9 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool, tool
+
+from agentforge_sdk import tracing
+from invoice_agent.trace_recorder import current_recorder
 
 CUSTOMERS: dict[str, dict[str, Any]] = {
     "CUST-01": {
@@ -202,7 +209,39 @@ def _overridden(original: BaseTool, override: Mapping[str, Any]) -> BaseTool:
     )
 
 
+def _traced(original: BaseTool) -> BaseTool:
+    inner: Callable[..., tuple[str, dict[str, Any]]] = original.func  # type: ignore[attr-defined]
+
+    def fn(**kwargs: Any) -> tuple[str, dict[str, Any]]:
+        recorder = current_recorder()
+        decision = recorder.decision if recorder is not None else None
+        with tracing.span(
+            f"execute_tool {original.name}",
+            {
+                "agentforge.component": "agent",
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": original.name,
+                "gen_ai.tool.call.id": recorder.decision_call_id if recorder is not None else None,
+                "agentforge.tool.args": kwargs,
+            },
+            parent=decision.context if decision is not None else None,
+        ) as span:
+            if recorder is not None:
+                recorder.tool_span_ids.append(span.span_id)
+            content, data = inner(**kwargs)  # an exception marks the span ERROR (with an event) and propagates
+            span.set("agentforge.tool.result", data)
+            return content, data
+
+    return StructuredTool.from_function(
+        func=fn,
+        name=original.name,
+        description=original.description,
+        args_schema=original.args_schema,
+        response_format="content_and_artifact",
+    )
+
+
 def tools_for(scenario: Mapping[str, Any] | None) -> list[BaseTool]:
-    """The tool set for one case: TOOLS, with the scenario's overrides applied."""
+    """The tool set for one case: TOOLS, with the scenario's overrides applied, each traced."""
     overrides = (scenario or {}).get("tool_overrides") or {}
-    return [_overridden(t, overrides[t.name]) if t.name in overrides else t for t in TOOLS]
+    return [_traced(_overridden(t, overrides[t.name]) if t.name in overrides else t) for t in TOOLS]

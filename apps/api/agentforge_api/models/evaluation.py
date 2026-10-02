@@ -154,6 +154,9 @@ class AgentStep(Base):
     retrieved_doc_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     output: Mapped[str | None] = mapped_column(String, nullable=True)
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The span the agent reported for this step (a trace_spans.span_id of the
+    # same case), if it reported one. Never filled in by AgentForge.
+    span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     # `result` is the tool's return value, so the parent row is `result_row`.
