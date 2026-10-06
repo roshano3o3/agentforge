@@ -149,3 +149,22 @@ class AgentForgeClient:
         )
         _raise_for_status(resp)
         return resp.json()
+
+    # -- failure replay ------------------------------------------------------------
+
+    def create_replay(self, result_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Creates a *pending* replay of one case result and queues it (HTTP 202);
+        poll `get_replay` until it's `completed` or `failed`."""
+        resp = self._client.post("/replay", json={"result_id": result_id, "overrides": overrides or {}})
+        _raise_for_status(resp)
+        return resp.json()
+
+    def get_replay(self, replay_id: str) -> dict[str, Any]:
+        resp = self._client.get(f"/replays/{replay_id}")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def list_replays(self, result_id: str) -> list[dict[str, Any]]:
+        resp = self._client.get(f"/results/{result_id}/replays")
+        _raise_for_status(resp)
+        return resp.json()

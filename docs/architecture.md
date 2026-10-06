@@ -1,4 +1,4 @@
-# Architecture — through Phase 6 (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer)
+# Architecture — through Phase 7 part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -112,6 +112,10 @@ erDiagram
     EvaluationRun ||--o{ TraceSpan : "run-level spans"
     EvaluationResult ||--o{ TraceSpan : "the case's span tree"
     AgentStep }o--o| TraceSpan : "span_id (agent-reported)"
+    EvaluationResult ||--o{ Replay : "re-run (Phase 7)"
+    Replay ||--o{ ReplayStep : "its trajectory"
+    Replay ||--o{ ReplayMetricScore : "its verdicts"
+    Replay ||--o{ ReplaySpan : "its spans"
 ```
 
 - `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
@@ -202,6 +206,8 @@ Its planner is scripted Python, not a model.
 | A release decision never changes | no update/delete route | trigger blocks every UPDATE/DELETE on `release_decisions` (migration `f3c7a9e2b510`) |
 | A baseline points to a completed run of its own application and dataset | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` (dataset check: migration `b9e4f1c27d36`) |
 | A finished run's spans never change | written only by the API (run creation) and the worker, while the run is pending/running | trigger blocks INSERT/UPDATE/DELETE on `trace_spans` (migration `c3d7e2a94b18`) |
+| A finished replay and its steps, scores and spans never change | `replays.transition()` / `assert_accepts_outcome()`; written only by the worker | triggers block UPDATE/DELETE of a completed/failed `replays` row and INSERT/UPDATE/DELETE on `replay_steps`, `replay_metric_scores`, `replay_spans` (migration `d4a8f2c61e57`) |
+| A replay never changes the run it replays | the replay only reads the original result; its outcome goes to the replay tables | the original run's triggers still apply (it's finished) |
 | A published case's trajectory expectations never change | `PATCH` → `409` | the published-`test_cases` trigger covers every column, `trajectory` included |
 
 Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
@@ -256,6 +262,39 @@ the case's spans and the run-level spans of the same trace and returns them
 as a tree, each span marked with the agent step that reported it
 (`agent_steps.span_id`). Nothing in the tree is computed from steps; spans
 inside an HTTP agent are never collected.
+
+## Failure replay (Phase 7 part A)
+
+```
+POST /replay {result_id, overrides}      apps/api/agentforge_api/routers/replays.py
+  -> 404 unknown result; 409 run not finished; 400 overrides on an http adapter (it can't declare settings)
+  -> copy the run's adapter, pinned evaluators, threshold, latency budget, timeout, provider onto a
+     `replays` row (status pending); store the API's agentforge.replay.create span with it; commit
+  -> enqueue "execute_replay" (_job_id "replay:<id>") with the span's carrier; Redis down -> failed + 503
+
+worker: execute_replay(replay_id)        apps/worker/agentforge_worker/replay.py
+  finished already? -> no-op;  running (previous attempt died) -> clear its partial outcome, start over
+  build the adapter, resolve the pinned evaluators, check_overrides(adapter, overrides)
+      -> the adapter's declaration (agentforge_sdk.replay.replayable) decides; any mismatch:
+         failed, "overrides rejected: adapter '<target>': <every problem>"  (the agent never runs)
+  runner._run_case(...)  -- the run's own per-case code path: agent call (overrides passed only
+                            if there are some), evaluators with the case's config, spans
+  write the outcome (answer, status, tokens, latency), replay_steps, replay_metric_scores and the
+  case's spans while running; then the replay span's rows + the flip to completed
+
+GET /replays/{id}  -> the replay, its steps/metrics/span tree, and the diff against the original
+                      result (services/replay_diff.py, computed from both sides' stored rows)
+```
+
+The override contract lives in the SDK (no server imports): an adapter
+declares `Setting`s (bool / int / float / str / text / choice / object
+with fields, optional cross-setting check), the worker validates the
+requested overrides against them, and only validated values reach the
+adapter, as `overrides=`. The API image has no adapters installed, so this
+check can only happen in the worker; the API checks only the overrides'
+shape. A replay without overrides calls the adapter with exactly the
+arguments the run used, which is what makes the determinism check
+(`diff.identical`) meaningful.
 
 ## Reproducibility metadata recorded per run
 

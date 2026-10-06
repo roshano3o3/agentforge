@@ -72,13 +72,13 @@ def _tokenize(text: str) -> set[str]:
 _DOC_TOKENS: dict[str, set[str]] = {doc.id: _tokenize(f"{doc.title} {doc.text}") for doc in DOCUMENTS}
 
 
-def retrieve_top_k(query: str, k: int = 2) -> list[str]:
+def retrieve_top_k(query: str, k: int = 2, min_score: int = 1) -> list[str]:
     """Return up to `k` document IDs, ranked by keyword-overlap score.
 
     Score for a document = number of (stopword-filtered) query tokens that
-    also appear in the document's title+text. Documents with a score of 0
-    are excluded entirely -- we never return a document that shares no
-    vocabulary with the query. Ties are broken by document ID so the
+    also appear in the document's title+text. Documents scoring below
+    `min_score` (default 1) are excluded entirely -- we never return a
+    document that shares no vocabulary with the query. Ties are broken by document ID so the
     ranking is fully deterministic.
     """
     query_tokens = _tokenize(query)
@@ -88,7 +88,7 @@ def retrieve_top_k(query: str, k: int = 2) -> list[str]:
     scored = []
     for doc_id, doc_tokens in _DOC_TOKENS.items():
         score = len(query_tokens & doc_tokens)
-        if score > 0:
+        if score >= max(min_score, 1):
             scored.append((doc_id, score))
 
     scored.sort(key=lambda pair: (-pair[1], pair[0]))

@@ -18,7 +18,8 @@ from agentforge_api.db.base import get_session
 from agentforge_api.models.dataset import TestCase
 from agentforge_api.models.evaluation import AgentStep, EvaluationResult
 from agentforge_api.models.trace import TraceSpan
-from agentforge_core.schemas import TraceOut, TraceSpanOut
+from agentforge_api.services.span_tree import span_tree
+from agentforge_core.schemas import TraceOut
 
 router = APIRouter(prefix="/traces", tags=["traces"])
 
@@ -63,41 +64,16 @@ async def get_trace(
         for s in await session.scalars(
             select(AgentStep).where(AgentStep.evaluation_result_id == result_id, AgentStep.span_id.is_not(None))
         )
+        if s.span_id is not None
     }
     test_case = await session.get(TestCase, result.test_case_id)
 
-    nodes = {s.span_id: _node(s, steps.get(s.span_id)) for s in [*run_spans, *case_spans]}
-    roots: list[TraceSpanOut] = []
-    for node in nodes.values():
-        parent = nodes.get(node.parent_span_id or "")
-        (parent.children if parent is not None else roots).append(node)
-    for node in nodes.values():
-        node.children.sort(key=lambda n: (n.start_time, n.name))
-    roots.sort(key=lambda n: n.start_time)
+    rows = [*run_spans, *case_spans]
     return TraceOut(
         result_id=result_id,
         case_key=test_case.case_key if test_case else "",
         run_id=result.evaluation_run_id,
         trace_id=trace_id,
-        span_count=len(nodes),
-        spans=roots,
-    )
-
-
-def _node(s: TraceSpan, step_index: int | None) -> TraceSpanOut:
-    return TraceSpanOut(
-        span_id=s.span_id,
-        parent_span_id=s.parent_span_id,
-        name=s.name,
-        kind=s.kind,
-        service=s.service,
-        start_time=s.start_time,
-        end_time=s.end_time,
-        duration_ms=s.duration_ms,
-        attributes=s.attributes,
-        status_code=s.status_code,  # type: ignore[arg-type]  # CHECK-constrained to the Literal values
-        status_message=s.status_message,
-        events=s.events,
-        step_index=step_index,
-        children=[],
+        span_count=len(rows),
+        spans=span_tree(rows, steps),
     )

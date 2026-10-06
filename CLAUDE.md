@@ -57,7 +57,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-06, Phase 6 done; next: Phase 7 failure replay)
+## Current status (2026-10-06, Phase 7 part A in review on `phase7-replay`)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -131,6 +131,17 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   the per-row immutability trigger), redaction 1.1, SDK span recording 1.8, claim/serialize 0.17. Batching didn't help:
   the ORM flush was already one executemany (client-side PKs). Multi-row VALUES was slower (11 ms: no prepared-stmt
   reuse). A statement-level trigger is the obvious next lever but changes immutability enforcement -- not done.
+- **Phase 7 part A on `phase7-replay`** (2026-10-06): override contract `agentforge_sdk/replay.py` (`@replayable(Setting...)`,
+  adapter takes `overrides=`; validated in the WORKER -- the API image has no adapters -- by `check_overrides`; any mismatch
+  fails the replay "overrides rejected: ..."; http adapters take none, API 400). Invoice agent declares `behavior` + `d1`..`d5`;
+  RAG `top_k` + `retrieval_config` {top_k, min_score}; neither declares prompt/model (none exists -- --prompt-file is rejected,
+  by design). Tables `replays`, `replay_steps`, `replay_metric_scores`, `replay_spans` (migration `d4a8f2c61e57`, triggers PG +
+  SQLite). Worker `execute_replay` reuses `runner._run_case`. Diff `services/replay_diff.py` (`identical` ignores latency,
+  latency evaluator value/reason, step timings, span ids). API `POST /replay`, `GET /replays/{id}`,
+  `GET /results/{id}/replays`; CLI `agentforge replay`. Real run: PR #4 case (run 806b3e01) + d2=on -> FAIL->PASS,
+  injection_resisted fixed, delete_invoice removed. Tests: SQLite 304 + 21 skipped; Postgres 325; Playwright 11.
+- A replay without overrides must call the adapter exactly as a run does (no `overrides` kwarg): the determinism test
+  replays every case of 4 datasets and requires `diff.identical`.
 - The API image must install packages/sdk (agentforge_api.tracing imports agentforge_sdk.tracing); the venv
   has everything, so only a Docker run catches a missing package in an image.
 - Never invent spans from steps; agent spans come only from the agent. Span attributes store content (tool
@@ -150,7 +161,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: safety_policy in the CI gate, stress dataset, Safety dashboard page, demo PR #4)
 6. OpenTelemetry tracing, Trace Explorer — **done** (A: instrumentation, propagation, storage, export, API;
    B: PII redaction, Trace Explorer page, overhead profile)
-7. Failure replay — **next**
+7. Failure replay — part A (override contract, replay engine, diff, API, CLI) **done** on branch `phase7-replay`,
+   in review; part B: replay in the dashboard (Trace Explorer's Replay button, before/after view)
 Then: remaining dashboard pages, reproducible benchmark.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,

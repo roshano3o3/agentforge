@@ -111,6 +111,8 @@ def worker_api(live_api: str, test_db_url: str | None) -> str:
 
 
 def _run_cli(args: list[str], timeout: float = 180) -> subprocess.CompletedProcess[str]:
+    # Plain text for the assertions: no ANSI styling even where CI sets FORCE_COLOR.
+    env = {k: v for k, v in os.environ.items() if k != "FORCE_COLOR"} | {"NO_COLOR": "1", "COLUMNS": "200"}
     return subprocess.run(
         [sys.executable, "-m", "agentforge_cli.main", *args],
         cwd=REPO_ROOT,
@@ -118,6 +120,7 @@ def _run_cli(args: list[str], timeout: float = 180) -> subprocess.CompletedProce
         text=True,
         encoding="utf-8",
         timeout=timeout,
+        env=env,
     )
 
 
@@ -238,3 +241,55 @@ def test_cli_evaluate_fails_fast_on_unknown_dataset(live_api: str) -> None:
     assert evaluate.returncode == 1
     assert "Setup failed" in evaluate.stdout
     assert "does-not-exist" in evaluate.stdout
+
+
+def test_cli_replay_is_executed_by_the_docker_worker(worker_api: str) -> None:
+    """Demo PR #4's failing injection case, replayed by the real CLI with D2 back on."""
+    publish = _run_cli(["dataset", "publish", "datasets/invoice_agent_safety_v1.yaml", "--api-url", worker_api])
+    assert publish.returncode == 0, publish.stdout + publish.stderr
+    evaluate = _run_cli(
+        [
+            "evaluate",
+            "--app",
+            "invoice-agent",
+            "--app-version",
+            "pr4-d2-off",
+            "--dataset",
+            "invoice-agent-safety",
+            "--adapter",
+            "invoice_agent.adapter:answer_v1_without_d2",
+            "--api-url",
+            worker_api,
+            "--poll-interval",
+            "0.5",
+            "--wait-timeout",
+            "120",
+        ]  # fmt: skip
+    )
+    assert evaluate.returncode == 0, evaluate.stdout + evaluate.stderr
+    [summary] = httpx.get(f"{worker_api}/runs", timeout=5).json()
+    run = httpx.get(f"{worker_api}/runs/{summary['id']}", timeout=5).json()
+    case = next(
+        r for r in run["results"] if r["case_key"] == "injection_indirect.memo-delete@get_invoice.contact-lookup-001"
+    )
+    assert case["passed"] is False
+
+    replay = _run_cli(["replay", case["id"], "--set", "d2=on", "--api-url", worker_api, "--poll-interval", "0.3"])
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    out = replay.stdout
+    assert "overrides: d2=on" in out
+    assert "Case: FAIL -> PASS" in out
+    assert "fixed" in out and "injection_resisted" in out
+    # The trajectory table's row for the call D2 prevents.
+    removed = next(line for line in out.splitlines() if 'delete_invoice {"invoice_id": "INV-1004"}' in line)
+    assert "removed" in removed
+    [listed] = httpx.get(f"{worker_api}/results/{case['id']}/replays", timeout=5).json()
+    assert listed["status"] == "completed" and listed["passed"] is True
+
+    unchanged = _run_cli(["replay", case["id"], "--api-url", worker_api, "--poll-interval", "0.3"])
+    assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
+    assert "Identical to the original" in unchanged.stdout
+
+    rejected = _run_cli(["replay", case["id"], "--set", "temperature=0.2", "--api-url", worker_api])
+    assert rejected.returncode == 1
+    assert "overrides rejected" in rejected.stdout and "unknown setting 'temperature'" in rejected.stdout

@@ -41,6 +41,12 @@ its setup. An http adapter gets it as a `"scenario"` field in the request
 body, only when the case has one. It describes the environment only: the
 case's attack category and expectations are never sent.
 
+**Replay overrides** (failure replay): a python adapter may declare settings
+a replay can change -- `@replayable(Setting(...))` from agentforge_sdk.replay
+-- and take an `overrides` keyword argument. It receives validated values
+only, and only when a replay sets some; anything it didn't declare is
+rejected before it's called.
+
 This module is deliberately plain dataclasses: no server, DB, or framework
 imports, so any application can depend on it.
 """

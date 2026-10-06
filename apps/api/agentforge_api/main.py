@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agentforge_api import tracing
 from agentforge_api.config import get_settings
-from agentforge_api.routers import applications, datasets, evaluators, release, runs, traces
+from agentforge_api.routers import applications, datasets, evaluators, release, replays, runs, traces
 
 settings = get_settings()
 tracing.setup("agentforge-api")
@@ -32,6 +32,7 @@ app.include_router(evaluators.router)
 app.include_router(runs.router)
 app.include_router(release.router)
 app.include_router(traces.router)
+app.include_router(replays.router)
 
 
 @app.get("/health")

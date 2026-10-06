@@ -341,9 +341,15 @@ def _case_attributes(tc: TestCase, started: dict) -> dict[str, Any]:
 
 
 async def _run_case(
-    adapter: Any, tc: TestCase, started: dict, pinned: PinnedEvaluators, config: EvalConfig
+    adapter: Any,
+    tc: TestCase,
+    started: dict,
+    pinned: PinnedEvaluators,
+    config: EvalConfig,
+    overrides: dict[str, Any] | None = None,
 ) -> tuple[CaseOutcome, list[tuple[EvaluatorSpec, MetricOutcome]], list[dict[str, Any]]]:
-    """One case under its own span: the agent call, then each evaluator."""
+    """One case under its own span: the agent call, then each evaluator.
+    `overrides`: a replay's validated overrides (agentforge_worker.replay)."""
     with tracing.span("agentforge.case", _case_attributes(tc, started)) as case_span:
         with tracing.span(
             "invoke_agent",
@@ -356,7 +362,7 @@ async def _run_case(
                 "agentforge.agent.scenario": tc.scenario,
             },
         ) as call_span:
-            outcome = await invoke(adapter, tc.input, tc.case_key, started["timeout"], tc.scenario)
+            outcome = await invoke(adapter, tc.input, tc.case_key, started["timeout"], tc.scenario, overrides)
             out = outcome.output
             if out is not None:
                 call_span.set_attributes(

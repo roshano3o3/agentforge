@@ -1,5 +1,5 @@
 """AgentForge CLI: dataset publish/validate, adversarial generate, evaluate,
-runs list/show, baseline set/show, compare, gate.
+runs list/show, baseline set/show, compare, gate, replay.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -46,6 +46,7 @@ from agentforge_cli.release_io import (
     markdown_report,
     verdict_line,
 )
+from agentforge_cli.replay_io import OverrideArgsError, build_overrides, print_replay
 from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
 from agentforge_sdk import AgentForgeClient
 
@@ -409,6 +410,59 @@ def _print_run(run: dict[str, Any]) -> None:
     )
     if run.get("dataset_content_hash"):
         console.print(f"dataset content hash: {run['dataset_content_hash']}")
+
+
+@app.command()
+def replay(
+    result_id: str = typer.Argument(..., help="A case's result id in a run (results[].id, e.g. from GET /runs/{id})."),
+    set_: list[str] = typer.Option(
+        [],
+        "--set",
+        help="Override key=value (repeatable). The value is parsed as JSON when it is JSON (3, true, {...}), "
+        "otherwise taken as a string. Which keys exist is declared by the adapter.",
+    ),
+    prompt_file: Path | None = typer.Option(
+        None, "--prompt-file", help="Set the `prompt` override to this file's text (adapters that declare one)."
+    ),
+    retrieval_config: Path | None = typer.Option(
+        None, "--retrieval-config", help="Set the `retrieval_config` override from this YAML/JSON object."
+    ),
+    poll_interval: float = typer.Option(0.5, "--poll-interval", help="Seconds between status checks."),
+    wait_timeout: float = typer.Option(300.0, "--wait-timeout", help="Stop waiting after this many seconds."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url", help="AgentForge API base URL."),
+) -> None:
+    """Re-run one evaluated case (same input, scenario, dataset version and
+    evaluator versions), optionally with overrides, and print it against the
+    original. Executed by the worker, like runs.
+
+    Exit code: 0 completed, 1 failed (including overrides the adapter rejects)
+    or setup error, 2 still unfinished when --wait-timeout elapsed.
+    """
+    try:
+        overrides = build_overrides(set_, prompt_file, retrieval_config)
+    except OverrideArgsError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            current = client.create_replay(result_id, overrides)
+        except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
+            console.print(f"[red]Replay not created:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+        console.print(f"Submitted replay [bold]{current['id']}[/bold] of {escape(current['case_key'])}")
+        deadline = time.monotonic() + wait_timeout
+        while current["status"] not in FINISHED:
+            if time.monotonic() > deadline:
+                console.print(f"[yellow]Still {current['status']} after {wait_timeout:g}s; stopped waiting.[/yellow]")
+                raise typer.Exit(code=2)
+            time.sleep(poll_interval)
+            try:
+                current = client.get_replay(current["id"])
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]Lost contact with the API while waiting:[/red] {escape(str(exc))}")
+                raise typer.Exit(code=1) from None
+    print_replay(console, current)
+    if current["status"] == "failed":
+        raise typer.Exit(code=1)
 
 
 @runs_app.command("list")

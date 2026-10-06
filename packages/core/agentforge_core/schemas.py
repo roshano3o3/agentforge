@@ -7,6 +7,7 @@ SQLAlchemy or any other server-side machinery -- it is pure data contracts.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from enum import Enum
@@ -499,3 +500,160 @@ class TraceOut(BaseModel):
     trace_id: str
     span_count: int
     spans: list[TraceSpanOut]  # roots (normally one: agentforge.run.create)
+
+
+# -- failure replay -------------------------------------------------------------------
+
+_OVERRIDE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_OVERRIDES_CHARS = 200_000
+
+
+class ReplayCreate(BaseModel):
+    """Re-run one evaluated case. `overrides` are checked here only for shape
+    (names, JSON, size); what they may contain is up to the adapter, which
+    declares its settings -- the worker validates against that declaration and
+    rejects the replay with a message if they don't match."""
+
+    result_id: str = Field(min_length=1, max_length=36)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("overrides")
+    @classmethod
+    def overrides_shape(cls, value: dict[str, Any]) -> dict[str, Any]:
+        bad = [k for k in value if not _OVERRIDE_KEY.match(k)]
+        if bad:
+            raise ValueError(f"override names must be identifiers (letters, digits, _): {bad}")
+        try:
+            size = len(json.dumps(value, allow_nan=False))
+        except ValueError as exc:
+            raise ValueError(f"overrides must be JSON: {exc}") from exc
+        if size > MAX_OVERRIDES_CHARS:
+            raise ValueError(f"overrides are {size} characters of JSON; at most {MAX_OVERRIDES_CHARS} allowed")
+        return value
+
+
+ReplayStatus = Literal["pending", "running", "completed", "failed"]
+
+
+class ReplaySummaryOut(BaseModel):
+    id: str
+    original_result_id: str
+    original_run_id: str
+    case_key: str
+    overrides: dict[str, Any]
+    status: ReplayStatus
+    error_message: str | None
+    result_status: ResultStatus | None
+    passed: bool | None
+    original_passed: bool | None
+    # Completed replays only: every step, tool call, answer and evaluator
+    # verdict matched the original (see ReplayDiffOut.identical).
+    identical: bool | None = None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class MetricBrief(BaseModel):
+    evaluator_version: str
+    passed: bool | None
+    score: float | None
+    value: float | None
+    unit: str | None
+    reason: str
+
+
+class EvaluatorChange(BaseModel):
+    evaluator_name: str
+    # unchanged | fixed (fail -> pass) | regressed (pass -> fail) | changed
+    # (score/value/reason/applicability) | added | removed
+    change: Literal["unchanged", "fixed", "regressed", "changed", "added", "removed"]
+    before: MetricBrief | None
+    after: MetricBrief | None
+
+
+class StepBrief(BaseModel):
+    step_index: int
+    kind: str
+    name: str
+    args: dict
+    result: Any
+    error: str | None
+    output: str | None
+    retrieved_doc_ids: list[str]
+
+
+class StepChange(BaseModel):
+    # Steps are aligned by (kind, tool name) in order; an aligned pair is
+    # unchanged or changed (changed_fields lists what differs).
+    op: Literal["unchanged", "changed", "added", "removed"]
+    kind: str
+    name: str
+    before: StepBrief | None
+    after: StepBrief | None
+    changed_fields: list[str] = Field(default_factory=list)
+
+
+class TextSegment(BaseModel):
+    op: Literal["equal", "insert", "delete"]
+    text: str
+
+
+class AnswerDiff(BaseModel):
+    before: str | None
+    after: str | None
+    changed: bool
+    segments: list[TextSegment]  # word-level, in order
+
+
+class NumberChange(BaseModel):
+    before: float | None
+    after: float | None
+    delta: float | None  # after - before, when both are known
+
+
+class ReplayDiffOut(BaseModel):
+    """Original result vs replay. `identical` ignores what's measured rather
+    than produced -- latency (and the latency evaluator's measured value and
+    reason), step timings and span ids -- and compares everything else:
+    status, verdict, answer, retrieved docs, citations, tokens, every step
+    (kind, tool, args, result, error, output) and every evaluator's version,
+    verdict, score, value and reason."""
+
+    identical: bool
+    differences: list[str]
+    before_status: ResultStatus
+    after_status: ResultStatus
+    before_passed: bool | None
+    after_passed: bool | None
+    evaluators: list[EvaluatorChange]
+    trajectory: list[StepChange]
+    answer: AnswerDiff
+    latency_ms: NumberChange
+    input_tokens: NumberChange
+    output_tokens: NumberChange
+
+
+class ReplayOut(ReplaySummaryOut):
+    test_case_id: str
+    input: str
+    dataset_version_id: str
+    dataset_content_hash: str | None
+    adapter_type: str
+    adapter_target: str
+    evaluators: list[str]
+    labels: list[str]
+    output_answer: str | None
+    retrieved_doc_ids: list[str]
+    citations: list[str]
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str | None
+    latency_ms: float | None
+    error_type: str | None
+    case_error_message: str | None
+    metrics: list[MetricScoreOut]
+    steps: list[AgentStepOut]
+    trace_id: str | None
+    spans: list[TraceSpanOut]  # the replay's span tree (redacted like every stored span)
+    started_at: datetime | None
+    diff: ReplayDiffOut | None  # completed replays only

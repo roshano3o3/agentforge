@@ -16,8 +16,9 @@ from arq.connections import RedisSettings
 from agentforge_api import tracing
 from agentforge_api.config import get_settings
 from agentforge_api.db.base import async_session_factory
-from agentforge_api.queue import EXECUTE_RUN_JOB
+from agentforge_api.queue import EXECUTE_REPLAY_JOB, EXECUTE_RUN_JOB
 from agentforge_evaluators import ModelPrice, parse_pricing
+from agentforge_worker.replay import execute_replay
 from agentforge_worker.runner import execute_run
 
 log = logging.getLogger("agentforge.worker")
@@ -64,12 +65,19 @@ async def run_job(ctx: dict, run_id: str, trace_context: dict[str, str] | None =
     return await execute_run(async_session_factory, run_id, pricing=ctx["pricing"], trace_context=trace_context)
 
 
+async def replay_job(ctx: dict, replay_id: str, trace_context: dict[str, str] | None = None) -> str:
+    return await execute_replay(async_session_factory, replay_id, pricing=ctx["pricing"], trace_context=trace_context)
+
+
 class WorkerSettings:
     # max_tries=2: a hard-killed worker (OOM, SIGKILL) never runs the
     # cancellation handler, so arq's one retry restarts the run from scratch
     # (see runner._start). A cancelled job has already marked the run failed,
     # so its retry is a no-op.
-    functions = [func(run_job, name=EXECUTE_RUN_JOB, timeout=JOB_TIMEOUT_SECONDS, max_tries=2)]
+    functions = [
+        func(run_job, name=EXECUTE_RUN_JOB, timeout=JOB_TIMEOUT_SECONDS, max_tries=2),
+        func(replay_job, name=EXECUTE_REPLAY_JOB, timeout=JOB_TIMEOUT_SECONDS, max_tries=2),
+    ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = startup
     max_jobs = int(os.environ.get("AGENTFORGE_WORKER_MAX_JOBS", "4"))
