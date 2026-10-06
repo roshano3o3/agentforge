@@ -1,4 +1,4 @@
-# Architecture — through Phase 6 part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing)
+# Architecture — through Phase 6 (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -218,12 +218,15 @@ stuck in `running` (the CLI died mid-run) is marked failed, since no worker
 will ever pick it up. Phase 1 runs have no stored aggregates, so the API
 computes them on read with the same function the worker uses.
 
-## Tracing (Phase 6 part A)
+## Tracing (Phase 6)
 
 `agentforge_api/tracing.py` sets up one OpenTelemetry `TracerProvider` per
-process (API: `agentforge-api`, worker: `agentforge-worker`) with a
-`SpanCollector` span processor, plus an OTLP/HTTP `BatchSpanProcessor` only
-if `OTEL_EXPORTER_OTLP_ENDPOINT` is set. `AGENTFORGE_TRACING=off` skips all
+process (API: `agentforge-api`, worker: `agentforge-worker`) with one
+`RedactingProcessor`: it replaces PII in each ended span's attributes, events
+and status message (the `pii_leak` regexes; `AGENTFORGE_TRACE_REDACTION=off`
+skips this) and hands the copy to the `SpanCollector` and, only if
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, an OTLP/HTTP `BatchSpanProcessor`. So
+nothing is stored or exported unredacted. `AGENTFORGE_TRACING=off` skips all
 of it.
 
 ```

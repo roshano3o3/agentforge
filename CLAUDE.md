@@ -57,7 +57,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-02, Phase 6A in review)
+## Current status (2026-10-06, Phase 6 done; next: Phase 7 failure replay)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -111,7 +111,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   `b9e4f1c27d36`; CI sets `production` per dataset. Gate workflow now checks out the base branch by ref
   (`pull_request.base.sha` is stale: PRs #2/#3 gated against b9f5a10 and skipped safety until fixed in f869f87).
   Re-run: PR #2 PASSED (trajectory 8/8, safety 11/11), PR #3 FAILED (trajectory 3/8, safety 4/11).
-- **Phase 6 part A on `phase6-otel`**: `agentforge_api/tracing.py` (provider + SpanCollector, OTLP only if
+- **Phase 6 part A** (merged to main with part B): `agentforge_api/tracing.py` (provider + SpanCollector, OTLP only if
   OTEL_EXPORTER_OTLP_ENDPOINT, AGENTFORGE_TRACING=off), `trace_spans` + `agent_steps.span_id` (migration
   `c3d7e2a94b18`, immutability triggers), job carries the API span's traceparent, HTTP adapter sends it,
   `agentforge_sdk.tracing` (optional OTel) used by the invoice agent (planner_decision / execute_tool spans,
@@ -119,10 +119,22 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   `tracing`. Overhead (Docker, v1, export off, medians excl. cold start): 10 cases 215 -> 265 ms, 35 cases
   744 -> 1058 ms (+5 / +9 ms per case, mostly span-row inserts). Tests: SQLite 259 + 19 skipped; Postgres 278;
   Playwright 8.
+- **Phase 6 part B done, merged to main** (2026-10-06): PII redaction of spans (`RedactingProcessor` in front of the
+  collector and any exporter; `pii_leak` regexes -> [EMAIL]/[PHONE]/[SSN]/[CARD]/[ACCOUNT], `agentforge.redacted`;
+  on by default, AGENTFORGE_TRACE_REDACTION=off; result rows and evaluators see real data). `GET /traces/{result_id}`.
+  Trace Explorer `/traces/[resultId]` (waterfall, blamed spans red with reasons, redacted values marked; linked from
+  Run detail, Safety, Regression; "Replay" button disabled until Phase 7) + `trace-explorer.spec.ts` +
+  `docs/screenshots/trace-explorer.png`. README "Tracing & failure analysis". Tests: SQLite 263 + 19 skipped; Postgres 282;
+  Playwright 11.
+- **Tracing overhead (re-measured 2026-10-06, Docker, v1, export off, redaction on, 8 warm runs each)**: +6.9 ms/case
+  (10 cases, 197 -> 266 ms) and +9.6 ms/case (35 cases, 718 -> 1055 ms). Profile per case: span INSERT 5.4 ms (2.2 of it
+  the per-row immutability trigger), redaction 1.1, SDK span recording 1.8, claim/serialize 0.17. Batching didn't help:
+  the ORM flush was already one executemany (client-side PKs). Multi-row VALUES was slower (11 ms: no prepared-stmt
+  reuse). A statement-level trigger is the obvious next lever but changes immutability enforcement -- not done.
 - The API image must install packages/sdk (agentforge_api.tracing imports agentforge_sdk.tracing); the venv
   has everything, so only a Docker run catches a missing package in an image.
 - Never invent spans from steps; agent spans come only from the agent. Span attributes store content (tool
-  results incl. PII), cut at 16k chars.
+  results), cut at 16k chars, PII-redacted by pattern before storage/export (names/addresses are not caught).
 - The new-run form shows one checkbox per registered evaluator: adding one changes run-flow.spec.ts's count.
 - Writing big Python patches through a bash heredoc breaks on quotes/`\n`: write the script to the scratchpad instead.
 - Rich parses `[...]` in printed strings as markup and drops it: `escape()` any interpolated data
@@ -136,9 +148,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: gate workflow, Regression/Baselines pages, demo PRs #2 (v1, PASSED) and #3 (v2, FAILED) left open)
 5. Safety / adversarial testing — **done** (A: generator, safety evaluators, per-category results;
    B: safety_policy in the CI gate, stress dataset, Safety dashboard page, demo PR #4)
-6. OpenTelemetry tracing, Trace Explorer — part A (instrumentation, propagation, storage, export, API) **done** on
-   branch `phase6-otel`, in review; part B: Trace Explorer page
-7. Failure replay
+6. OpenTelemetry tracing, Trace Explorer — **done** (A: instrumentation, propagation, storage, export, API;
+   B: PII redaction, Trace Explorer page, overhead profile)
+7. Failure replay — **next**
 Then: remaining dashboard pages, reproducible benchmark.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
