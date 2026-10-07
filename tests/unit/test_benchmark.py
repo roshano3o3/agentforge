@@ -9,6 +9,7 @@ tests/integration/test_llm_runs.py.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -235,6 +236,11 @@ def cli_env(tmp_path: Path, monkeypatch) -> tuple[Path, list[FakeClient]]:
     return tmp_path, clients
 
 
+def _plain(res) -> str:
+    """The CLI's output without ANSI styling: Rich colors it on GitHub Actions even through a pipe."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", res.output)
+
+
 def _compare(tmp_path: Path, *args: str):
     return CliRunner().invoke(
         main.app,
@@ -246,9 +252,9 @@ def test_cli_skips_models_without_keys_and_runs_nothing(cli_env) -> None:
     tmp_path, clients = cli_env
     res = _compare(tmp_path, "--models", "openai:gpt-5.4-mini,ollama:llama3.1:8b")
     assert res.exit_code == 1, res.output
-    assert "Skipping openai:gpt-5.4-mini: OPENAI_API_KEY is not set" in res.output
-    assert "Skipping ollama:llama3.1:8b: Ollama isn't reachable" in res.output
-    assert "No model can run here; nothing was started." in res.output
+    assert "Skipping openai:gpt-5.4-mini: OPENAI_API_KEY is not set" in _plain(res)
+    assert "Skipping ollama:llama3.1:8b: Ollama isn't reachable" in _plain(res)
+    assert "No model can run here; nothing was started." in _plain(res)
     assert all(c.created == [] for c in clients)
 
 
@@ -258,8 +264,8 @@ def test_cli_refuses_an_estimate_over_the_cap_unless_yes(cli_env) -> None:
     args = ("--models", "anthropic:claude-haiku-4-5", "--datasets", "invoice-agent", "--repeats", "2")
     res = _compare(tmp_path, *args, "--max-cost", "0.0001")
     assert res.exit_code == 1, res.output
-    assert "Refusing to start: the estimate" in res.output and clients[-1].created == []
-    assert "fake-key-for-tests" not in res.output
+    assert "Refusing to start: the estimate" in _plain(res) and clients[-1].created == []
+    assert "fake-key-for-tests" not in _plain(res)
 
     res = _compare(tmp_path, *args, "--max-cost", "0.0001", "--yes")
     assert res.exit_code == 0, res.output
@@ -284,4 +290,4 @@ def test_cli_scripted_baseline_runs_without_any_key(cli_env) -> None:
 
 def test_compare_still_does_run_vs_run() -> None:
     res = CliRunner().invoke(main.app, ["compare"])
-    assert res.exit_code != 0 and "--baseline and --candidate" in res.output
+    assert res.exit_code != 0 and "--baseline and --candidate" in _plain(res)
