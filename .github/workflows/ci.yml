@@ -101,14 +101,21 @@ jobs:
             -e AGENTFORGE_REDIS_URL="$AGENTFORGE_TEST_REDIS_URL" \
             agentforge-worker
 
+      # Failing tests are also printed as ::error annotations, which are readable without a log download.
       - name: pytest (Postgres; schema via Alembic, e2e through Redis + worker)
-        run: python -m pytest tests -v
+        run: |
+          set -o pipefail
+          python -m pytest tests -v -rfE 2>&1 | tee pytest-postgres.log || {
+            grep -E '^(FAILED|ERROR) ' pytest-postgres.log | sed 's/^/::error title=pytest (Postgres)::/'; exit 1; }
 
       - name: pytest (SQLite fallback)
         env:
           AGENTFORGE_TEST_DATABASE_URL: ""
           AGENTFORGE_TEST_REDIS_URL: ""
-        run: python -m pytest tests -v
+        run: |
+          set -o pipefail
+          python -m pytest tests -v -rfE 2>&1 | tee pytest-sqlite.log || {
+            grep -E '^(FAILED|ERROR) ' pytest-sqlite.log | sed 's/^/::error title=pytest (SQLite)::/'; exit 1; }
 
       - name: Worker logs
         if: always()
