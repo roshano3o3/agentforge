@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import ReplayForm from "@/components/ReplayForm";
+import ReplayList from "@/components/ReplayList";
 import { ApiError, getTrace } from "@/lib/api";
 import type { Trace, TraceSpan } from "@/lib/types";
 
@@ -214,7 +216,9 @@ function Waterfall({ rows, blamed }: { rows: Row[]; blamed: Map<string, Failure[
 export default function TraceExplorerPage() {
   const params = useParams<{ resultId: string }>();
   const resultId = params.resultId;
+  const router = useRouter();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [replayOpen, setReplayOpen] = useState(false);
 
   useEffect(() => {
     getTrace(resultId).then(
@@ -248,10 +252,21 @@ export default function TraceExplorerPage() {
     <main className="page">
       <div className="trace-header">
         <h1>Trace</h1>
-        <button type="button" className="publish-button" disabled title="Failure replay arrives in Phase 7">
+        <button
+          type="button"
+          className="publish-button"
+          aria-expanded={replayOpen}
+          onClick={() => setReplayOpen(!replayOpen)}
+          title="Re-run this case, optionally with settings changed"
+        >
           Replay
         </button>
       </div>
+      {replayOpen && (
+        <section className="replay-panel" aria-label="Replay">
+          <ReplayForm resultId={resultId} onCreated={(r) => router.push(`/replays/${r.id}`)} />
+        </section>
+      )}
 
       {!current && <div className="state-box">Loading the trace…</div>}
       {current && "error" in current && current.status === 404 && (
@@ -306,6 +321,7 @@ export default function TraceExplorerPage() {
           )}
           <h2 className="section-title">Spans</h2>
           <Waterfall rows={rows} blamed={blamed} />
+          <ReplayList resultId={resultId} />
         </>
       )}
     </main>

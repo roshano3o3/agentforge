@@ -334,3 +334,146 @@ export interface Trace {
   span_count: number;
   spans: TraceSpan[];
 }
+
+// -- failure replay (Phase 7) -----------------------------------------------------------
+
+export type ReplaySettingKind = "bool" | "int" | "float" | "str" | "choice" | "text" | "object";
+
+/** One setting an adapter accepts as a replay override (agentforge_sdk.replay.Setting). */
+export interface ReplaySetting {
+  name: string;
+  kind: ReplaySettingKind;
+  description: string;
+  choices: string[];
+  minimum: number | null;
+  maximum: number | null;
+  max_length: number | null;
+  fields: ReplaySetting[];
+  /** What the adapter uses when it isn't overridden (null: not stated). */
+  default: unknown;
+}
+
+export interface ReplayOptions {
+  result_id: string;
+  run_id: string;
+  case_key: string;
+  adapter_type: string | null;
+  adapter_target: string | null;
+  /** False for runs that didn't record their adapter's declaration. */
+  recorded: boolean;
+  overrides_supported: boolean;
+  reason: string | null;
+  settings: ReplaySetting[];
+  /** The adapter also checks combinations of settings, when the replay runs. */
+  worker_checks: boolean;
+}
+
+export type ReplayStatus = "pending" | "running" | "completed" | "failed";
+
+export interface ReplaySummary {
+  id: string;
+  original_result_id: string;
+  original_run_id: string;
+  case_key: string;
+  overrides: Record<string, unknown>;
+  status: ReplayStatus;
+  error_message: string | null;
+  result_status: ResultStatus | null;
+  passed: boolean | null;
+  original_passed: boolean | null;
+  identical: boolean | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface MetricBrief {
+  evaluator_version: string;
+  passed: boolean | null;
+  score: number | null;
+  value: number | null;
+  unit: string | null;
+  reason: string;
+}
+
+export interface EvaluatorChange {
+  evaluator_name: string;
+  change: "unchanged" | "fixed" | "broken" | "changed" | "added" | "removed";
+  before: MetricBrief | null;
+  after: MetricBrief | null;
+}
+
+export interface StepBrief {
+  step_index: number;
+  kind: string;
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  error: string | null;
+  output: string | null;
+  retrieved_doc_ids: string[];
+}
+
+export interface StepChange {
+  op: "unchanged" | "changed" | "added" | "removed";
+  kind: string;
+  name: string;
+  before: StepBrief | null;
+  after: StepBrief | null;
+  changed_fields: string[];
+}
+
+export interface NumberChange {
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+}
+
+export interface ReplayDiff {
+  identical: boolean;
+  differences: string[];
+  before_status: ResultStatus;
+  after_status: ResultStatus;
+  before_passed: boolean | null;
+  after_passed: boolean | null;
+  evaluators: EvaluatorChange[];
+  trajectory: StepChange[];
+  answer: {
+    before: string | null;
+    after: string | null;
+    changed: boolean;
+    segments: { op: "equal" | "insert" | "delete"; text: string }[];
+  };
+  latency_ms: NumberChange;
+  input_tokens: NumberChange;
+  output_tokens: NumberChange;
+}
+
+export interface Provenance {
+  code_version: string | null;
+  code_sha256: string | null;
+  pricing_sha256: string | null;
+}
+
+export interface Replay extends ReplaySummary {
+  test_case_id: string;
+  input: string;
+  dataset_version_id: string;
+  dataset_content_hash: string | null;
+  adapter_type: string;
+  adapter_target: string;
+  evaluators: string[];
+  labels: string[];
+  output_answer: string | null;
+  latency_ms: number | null;
+  error_type: string | null;
+  case_error_message: string | null;
+  started_at: string | null;
+  provenance: {
+    original: Provenance;
+    replay: Provenance;
+    same_code: boolean | null;
+    same_pricing: boolean | null;
+    warnings: string[];
+  };
+  diff: ReplayDiff | null;
+}

@@ -30,6 +30,11 @@ What a setting *does* is entirely the adapter's business; AgentForge only
 checks the declared shape. HTTP adapters can't declare settings (yet), so
 they can only be replayed without overrides.
 
+The worker also records each run's declaration (`describe_declaration`) with
+the run, so the API can check a replay request against it up front
+(`ReplaySettings.from_description`) and show a form for it. A `check`
+function can't be recorded, so cross-setting rules run in the worker only.
+
 Plain dataclasses, no server/DB imports -- like the rest of the SDK.
 """
 
@@ -38,7 +43,7 @@ from __future__ import annotations
 import inspect
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, TypeVar
 
 SettingKind = Literal["bool", "int", "float", "str", "choice", "text", "object"]
@@ -64,6 +69,10 @@ class Setting:
     * ``choice``: one of ``choices``.
     * ``object``: a mapping whose keys must be among ``fields`` (each a
       Setting, validated the same way), e.g. a retrieval config.
+
+    ``default`` is the value the adapter uses when the setting isn't
+    overridden (None: not stated). Informational -- shown in forms and
+    listings; validation never fills it in.
     """
 
     name: str
@@ -74,6 +83,7 @@ class Setting:
     maximum: float | None = None
     max_length: int = 100_000
     fields: tuple[Setting, ...] = ()
+    default: Any = None
 
     def __post_init__(self) -> None:
         if self.kind == "choice" and not self.choices:
@@ -92,9 +102,27 @@ class Setting:
             out["minimum"] = self.minimum
         if self.maximum is not None:
             out["maximum"] = self.maximum
+        if self.kind in ("str", "text"):
+            out["max_length"] = self.max_length
         if self.fields:
             out["fields"] = [f.describe() for f in self.fields]
+        out["default"] = self.default
         return out
+
+    @classmethod
+    def from_description(cls, d: Mapping[str, Any]) -> Setting:
+        """The inverse of `describe`."""
+        return cls(
+            name=d["name"],
+            kind=d["kind"],
+            description=d.get("description", ""),
+            choices=tuple(d.get("choices", ())),
+            minimum=d.get("minimum"),
+            maximum=d.get("maximum"),
+            max_length=d.get("max_length", 100_000),
+            fields=tuple(cls.from_description(f) for f in d.get("fields", ())),
+            default=d.get("default"),
+        )
 
     def validate(self, value: Any, where: str) -> Any:
         """The normalized value, or OverrideError naming `where` and what's expected."""
@@ -149,6 +177,23 @@ class ReplaySettings:
             self.check(values)
         return values
 
+    @classmethod
+    def from_description(cls, settings: list[Mapping[str, Any]]) -> ReplaySettings:
+        """Settings rebuilt from a recorded declaration (no `check`: it can't be recorded)."""
+        return cls(tuple(Setting.from_description(d) for d in settings))
+
+
+def describe_declaration(declared: ReplaySettings | None, *, reason_if_none: str) -> dict[str, Any]:
+    """What a run records about its adapter's replay settings (JSON)."""
+    if declared is None:
+        return {"overrides_supported": False, "reason": reason_if_none, "settings": [], "worker_checks": False}
+    return {
+        "overrides_supported": True,
+        "reason": None,
+        "settings": declared.describe(),
+        "worker_checks": declared.check is not None,
+    }
+
 
 def _names(settings: tuple[Setting, ...]) -> str:
     return ", ".join(sorted(s.name for s in settings))
@@ -172,14 +217,25 @@ def _validate_mapping(settings: tuple[Setting, ...], values: Mapping[str, Any], 
     return out
 
 
-def replayable(*settings: Setting, check: Callable[[dict[str, Any]], None] | None = None) -> Callable[[F], F]:
+def replayable(
+    *settings: Setting,
+    check: Callable[[dict[str, Any]], None] | None = None,
+    defaults: Mapping[str, Any] | None = None,
+) -> Callable[[F], F]:
     """Declare the replay settings a python adapter accepts. The adapter must
     take an `overrides` keyword argument; it receives only validated values,
-    and only when a replay sets some."""
+    and only when a replay sets some. `defaults` sets (top-level) settings'
+    `default`, for adapters sharing one list of settings."""
     names = [s.name for s in settings]
     if len(set(names)) != len(names):
         raise ValueError(f"duplicate replay setting names: {names}")
-    declared = ReplaySettings(tuple(settings), check)
+    unknown = sorted(set(defaults or {}) - set(names))
+    if unknown:
+        raise ValueError(f"defaults for undeclared settings: {unknown}")
+    settings = tuple(
+        replace(s, default=(defaults or {})[s.name]) if s.name in (defaults or {}) else s for s in settings
+    )
+    declared = ReplaySettings(settings, check)
 
     def decorate(fn: F) -> F:
         if "overrides" not in inspect.signature(fn).parameters:

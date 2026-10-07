@@ -1,18 +1,21 @@
 """Failure replay: re-run one evaluated case, optionally with overrides.
 
+    GET  /results/{result_id}/replay-options  what a replay of that result may override
     POST /replay                       create a pending replay and queue it for the worker (202)
     GET  /replays/{id}                 the replay, its outcome, spans, and the diff against the original
     GET  /results/{result_id}/replays  every replay of one result, newest first
 
-Like runs, the API never executes anything: it validates what it can (the
-result exists, its run is finished, the overrides' shape), copies the run's
-settings onto the replay, and enqueues it. Whether the adapter accepts the
-overrides is checked by the worker, against the adapter's own declaration
-(agentforge_sdk.replay) -- a mismatch fails the replay with that message.
-The original run and its result are only read.
+Like runs, the API never executes anything. The worker records each run's
+adapter declaration (agentforge_sdk.replay) with the run; POST /replay checks
+the overrides against it and answers 400 with the accepted settings on a
+mismatch. The worker checks again when the replay runs (the second check also
+covers rules across settings, which can't be recorded, and runs from before
+declarations were recorded). The original run and its result are only read.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from opentelemetry import trace
@@ -26,12 +29,75 @@ from agentforge_api.models.evaluation import TERMINAL_STATUSES, EvaluationResult
 from agentforge_api.models.replay import Replay, ReplaySpan
 from agentforge_api.queue import QueueUnavailableError, RunQueue, get_run_queue
 from agentforge_api.services import replays as replay_service
-from agentforge_core.schemas import ReplayCreate, ReplayOut, ReplaySummaryOut
+from agentforge_core.schemas import ReplayCreate, ReplayOptionsOut, ReplayOut, ReplaySettingOut, ReplaySummaryOut
+from agentforge_sdk.replay import OverrideError, ReplaySettings
 
 router = APIRouter(tags=["replays"])
 
 
-@router.post("/replay", response_model=ReplayOut, status_code=202)
+def _options(result: EvaluationResult, run: EvaluationRun, case_key: str) -> ReplayOptionsOut:
+    recorded = run.replay_options
+    common: dict[str, Any] = {
+        "result_id": result.id,
+        "run_id": run.id,
+        "case_key": case_key,
+        "adapter_type": run.adapter_type,
+        "adapter_target": run.adapter_target,
+    }
+    if recorded is None:
+        reason = (
+            "this run didn't record its adapter's replay settings (it predates that); a replay can still be "
+            "requested, and the worker checks any overrides when it runs"
+        )
+        if run.adapter_type is None:
+            reason = "this run predates the worker (no adapter recorded); there's nothing to replay"
+        elif run.adapter_type != "python":
+            reason = "HTTP adapters can't declare replay settings (agentforge_sdk.replay); replay without overrides"
+        return ReplayOptionsOut(
+            **common, recorded=False, overrides_supported=False, reason=reason, settings=[], worker_checks=False
+        )
+    return ReplayOptionsOut(
+        **common,
+        recorded=True,
+        overrides_supported=bool(recorded["overrides_supported"]),
+        reason=recorded.get("reason"),
+        settings=[ReplaySettingOut.model_validate(d) for d in recorded["settings"]],
+        worker_checks=bool(recorded.get("worker_checks")),
+    )
+
+
+async def _result_and_run(session: AsyncSession, result_id: str) -> tuple[EvaluationResult, EvaluationRun]:
+    result = await session.get(EvaluationResult, result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"result '{result_id}' not found (use results[].id of a run)")
+    run = await session.get(EvaluationRun, result.evaluation_run_id)
+    assert run is not None
+    return result, run
+
+
+@router.get("/results/{result_id}/replay-options", response_model=ReplayOptionsOut)
+async def get_replay_options(result_id: str, session: AsyncSession = Depends(get_session)) -> ReplayOptionsOut:
+    """The settings a replay of this result may override (from the run's adapter declaration), with
+    their types, allowed values and defaults; `overrides_supported` false (with a reason) when none."""
+    result, run = await _result_and_run(session, result_id)
+    test_case = await session.get(TestCase, result.test_case_id)
+    assert test_case is not None
+    return _options(result, run, test_case.case_key)
+
+
+def _reject(message: str, options: ReplayOptionsOut) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"message": message, "accepted_settings": [s.model_dump() for s in options.settings]},
+    )
+
+
+@router.post(
+    "/replay",
+    response_model=ReplayOut,
+    status_code=202,
+    responses={400: {"description": "Overrides the run's adapter doesn't accept: {message, accepted_settings}"}},
+)
 async def create_replay(
     payload: ReplayCreate,
     session: AsyncSession = Depends(get_session),
@@ -39,13 +105,7 @@ async def create_replay(
 ) -> ReplayOut:
     """Create a `pending` replay of one case result and enqueue it. 202: poll
     GET /replays/{id} until it's completed or failed."""
-    result = await session.get(EvaluationResult, payload.result_id)
-    if result is None:
-        raise HTTPException(
-            status_code=404, detail=f"result '{payload.result_id}' not found (use results[].id of a run)"
-        )
-    run = await session.get(EvaluationRun, result.evaluation_run_id)
-    assert run is not None
+    result, run = await _result_and_run(session, payload.result_id)
     if run.status not in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=409, detail=f"run {run.id} is still {run.status.value}; replay a result of a finished run"
@@ -54,16 +114,18 @@ async def create_replay(
         raise HTTPException(
             status_code=400, detail=f"run {run.id} predates the worker (no adapter recorded); there's nothing to replay"
         )
-    if payload.overrides and run.adapter_type != "python":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"overrides rejected: run {run.id} used an {run.adapter_type} adapter, which can't declare replay "
-                f"settings (got: {', '.join(sorted(payload.overrides))}); replay it without overrides"
-            ),
-        )
     test_case = await session.get(TestCase, result.test_case_id)
     assert test_case is not None
+    options = _options(result, run, test_case.case_key)
+    # An HTTP adapter can't take overrides even when its run predates recorded options.
+    if payload.overrides and (options.recorded or run.adapter_type != "python"):
+        if not options.overrides_supported:
+            raise _reject(f"overrides rejected: {options.reason}", options)
+        declared = ReplaySettings.from_description([s.model_dump() for s in options.settings])
+        try:
+            declared.validate(payload.overrides)
+        except OverrideError as exc:
+            raise _reject(f"overrides rejected: adapter '{run.adapter_target}': {exc}", options) from None
 
     span = tracing.tracer().start_span(
         "agentforge.replay.create",

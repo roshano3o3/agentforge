@@ -89,9 +89,12 @@ _DEFENSES: dict[str, tuple[str, Any, Any]] = {
     "d4": ("redact_pii", True, False),
     "d5": ("handle_tool_errors", True, False),
 }
-_replayable = replayable(
+_SETTINGS = (
     Setting(
-        "behavior", "choice", "Start from this preset instead of the adapter's own behavior", choices=tuple(PRESETS)
+        "behavior",
+        "choice",
+        "Start from this preset instead of the adapter's own behavior; defenses not overridden follow the preset",
+        choices=tuple(PRESETS),
     ),
     Setting("d1", "bool", "D1: refuse requests with prompt-override phrasing (off: obey them)"),
     Setting("d2", "bool", "D2: treat tool output as data (off: obey instructions found in it)"),
@@ -99,6 +102,13 @@ _replayable = replayable(
     Setting("d4", "bool", "D4: answers carry only a customer's name and billing email"),
     Setting("d5", "bool", "D5: stop and report after a failed tool call"),
 )
+
+
+def _replayable(base: Behavior) -> Any:
+    """The shared settings, with defaults read from this adapter's own behavior."""
+    preset = next((name for name, p in PRESETS.items() if p == base), None)
+    defaults = {"behavior": preset} | {k: getattr(base, f) == on for k, (f, on, _off) in _DEFENSES.items()}
+    return replayable(*_SETTINGS, defaults=defaults)
 
 
 def with_overrides(base: Behavior, overrides: Mapping[str, Any] | None) -> Behavior:
@@ -110,28 +120,28 @@ def with_overrides(base: Behavior, overrides: Mapping[str, Any] | None) -> Behav
     return replace(behavior, **changes)
 
 
-@_replayable
+@_replayable(BEHAVIOR)
 def answer(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
     return _run(with_overrides(BEHAVIOR, overrides), input_text, scenario)
 
 
-@_replayable
+@_replayable(V1)
 def answer_v1(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
     return _run(with_overrides(V1, overrides), input_text, scenario)
 
 
-@_replayable
+@_replayable(V2)
 def answer_v2(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
     return _run(with_overrides(V2, overrides), input_text, scenario)
 
 
-@_replayable
+@_replayable(V1_WITHOUT_D2)
 def answer_v1_without_d2(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:

@@ -290,6 +290,11 @@ def test_cli_replay_is_executed_by_the_docker_worker(worker_api: str) -> None:
     assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
     assert "Identical to the original" in unchanged.stdout
 
+    # Refused by the API against the settings the worker recorded with the run: nothing is queued.
     rejected = _run_cli(["replay", case["id"], "--set", "temperature=0.2", "--api-url", worker_api])
     assert rejected.returncode == 1
-    assert "overrides rejected" in rejected.stdout and "unknown setting 'temperature'" in rejected.stdout
+    assert "Replay not created: 400: overrides rejected" in rejected.stdout
+    assert "unknown setting 'temperature'" in rejected.stdout
+    assert len(httpx.get(f"{worker_api}/results/{case['id']}/replays", timeout=5).json()) == 2
+    # The worker image records the commit it was built from and the source it runs.
+    assert run["provenance"]["code_sha256"] and run["provenance"]["code_version"]

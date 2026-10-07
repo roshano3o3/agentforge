@@ -334,6 +334,15 @@ class EvaluationRunSummaryOut(BaseModel):
     aggregates: dict | None
 
 
+class ProvenanceOut(BaseModel):
+    """What a run or replay executed with (agentforge_worker.provenance).
+    All None: not recorded (before it ran, or before migration e7c1a4b95d23)."""
+
+    code_version: str | None = None
+    code_sha256: str | None = None
+    pricing_sha256: str | None = None
+
+
 class EvaluationRunOut(EvaluationRunSummaryOut):
     application_id: str
     application_version_id: str
@@ -347,6 +356,8 @@ class EvaluationRunOut(EvaluationRunSummaryOut):
     git_commit_sha: str | None
     # Content hash of the (published, frozen) dataset version this run used.
     dataset_content_hash: str | None = None
+    # What the worker ran it with (code version, source and pricing hashes).
+    provenance: ProvenanceOut = Field(default_factory=ProvenanceOut)
     results: list[EvaluationResultOut] = Field(default_factory=list)
 
 
@@ -564,9 +575,9 @@ class MetricBrief(BaseModel):
 
 class EvaluatorChange(BaseModel):
     evaluator_name: str
-    # unchanged | fixed (fail -> pass) | regressed (pass -> fail) | changed
+    # unchanged | fixed (fail -> pass) | broken (pass -> fail) | changed
     # (score/value/reason/applicability) | added | removed
-    change: Literal["unchanged", "fixed", "regressed", "changed", "added", "removed"]
+    change: Literal["unchanged", "fixed", "broken", "changed", "added", "removed"]
     before: MetricBrief | None
     after: MetricBrief | None
 
@@ -633,6 +644,48 @@ class ReplayDiffOut(BaseModel):
     output_tokens: NumberChange
 
 
+class ReplayProvenanceOut(BaseModel):
+    original: ProvenanceOut
+    replay: ProvenanceOut
+    # None when either side wasn't recorded.
+    same_code: bool | None
+    same_pricing: bool | None
+    warnings: list[str]
+
+
+class ReplaySettingOut(BaseModel):
+    """One setting an adapter accepts as a replay override (agentforge_sdk.replay.Setting)."""
+
+    name: str
+    kind: Literal["bool", "int", "float", "str", "choice", "text", "object"]
+    description: str = ""
+    choices: list[str] = Field(default_factory=list)
+    minimum: float | None = None
+    maximum: float | None = None
+    max_length: int | None = None
+    fields: list[ReplaySettingOut] = Field(default_factory=list)
+    default: Any = None
+
+
+class ReplayOptionsOut(BaseModel):
+    """What a replay of one result may override, as the worker recorded the
+    run's adapter declaring it. A replay without overrides is always possible."""
+
+    result_id: str
+    run_id: str
+    case_key: str
+    adapter_type: str | None
+    adapter_target: str | None
+    # False for runs that didn't record it (before migration e7c1a4b95d23):
+    # then only the worker can check overrides, when the replay runs.
+    recorded: bool
+    overrides_supported: bool
+    reason: str | None  # why overrides aren't supported, or why options aren't known
+    settings: list[ReplaySettingOut]
+    # The adapter also checks combinations of settings, which only the worker can run.
+    worker_checks: bool
+
+
 class ReplayOut(ReplaySummaryOut):
     test_case_id: str
     input: str
@@ -656,4 +709,5 @@ class ReplayOut(ReplaySummaryOut):
     trace_id: str | None
     spans: list[TraceSpanOut]  # the replay's span tree (redacted like every stored span)
     started_at: datetime | None
+    provenance: ReplayProvenanceOut
     diff: ReplayDiffOut | None  # completed replays only

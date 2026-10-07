@@ -53,7 +53,9 @@ from agentforge_evaluators import (
     effective_config,
     resolve,
 )
-from agentforge_worker.adapters import AdapterLoadError, CaseOutcome, build_adapter, invoke
+from agentforge_sdk.replay import describe_declaration
+from agentforge_worker import provenance
+from agentforge_worker.adapters import AdapterLoadError, CaseOutcome, HttpAdapter, build_adapter, invoke
 
 log = logging.getLogger("agentforge.worker")
 
@@ -196,6 +198,9 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], run_id: str)
         if run.status in TERMINAL_STATUSES:
             log.info("run %s is already %s; nothing to do", run_id, run.status.value)
             return None
+        # What this run executes with (also on a restart: it's the code running now).
+        for key, value in provenance.collect(run.adapter_type, run.adapter_target).items():
+            setattr(run, key, value)
         if run.status == RunStatus.pending:
             run_service.transition(run, RunStatus.running)
         else:
@@ -228,6 +233,24 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], run_id: str)
             "max_latency_ms": run.max_latency_ms,
             "labels": run_service.run_labels(run),
         }
+
+
+def replay_options(adapter: Any) -> dict[str, Any]:
+    """What a replay of this run's cases may override: the adapter's own declaration."""
+    reason = (
+        "HTTP adapters can't declare replay settings (agentforge_sdk.replay); replay without overrides"
+        if isinstance(adapter, HttpAdapter)
+        else "the adapter declares no replay settings (agentforge_sdk.replay.replayable); replay without overrides"
+    )
+    return describe_declaration(adapter.replay_settings, reason_if_none=reason)
+
+
+async def _record_replay_options(session_factory: async_sessionmaker[AsyncSession], run_id: str, adapter: Any) -> None:
+    async with session_factory() as session:
+        run = await session.get(EvaluationRun, run_id)
+        assert run is not None
+        run.replay_options = replay_options(adapter)
+        await session.commit()
 
 
 async def _record(
@@ -454,6 +477,7 @@ async def execute_run(
             await _fail(session_factory, run_id, message, end_run_span(message))
             return "failed"
 
+        await _record_replay_options(session_factory, run_id, adapter)
         config = EvalConfig(
             threshold=started["threshold"], max_latency_ms=started["max_latency_ms"], pricing=pricing or {}
         )

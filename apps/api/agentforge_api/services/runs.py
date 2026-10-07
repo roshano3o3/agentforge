@@ -34,6 +34,7 @@ from agentforge_core.schemas import (
     EvaluationRunOut,
     EvaluationRunSummaryOut,
     MetricScoreOut,
+    ProvenanceOut,
     RunProgress,
 )
 from agentforge_evaluators import CaseRecord, MetricRecord, compute_aggregates
@@ -183,6 +184,9 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
         git_commit_sha=run.git_commit_sha,
         # Runs only target published (frozen) versions, so this is that version's hash.
         dataset_content_hash=content_hash_of(dataset_version.default_evaluators, all_cases),
+        provenance=ProvenanceOut(
+            code_version=run.code_version, code_sha256=run.code_sha256, pricing_sha256=run.pricing_sha256
+        ),
         results=[
             EvaluationResultOut(
                 id=r.id,

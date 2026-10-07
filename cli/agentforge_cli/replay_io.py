@@ -111,7 +111,7 @@ def _number(change: dict[str, Any], unit: str) -> str:
 
 
 _STYLE = {"unchanged": "", "changed": "yellow", "added": "green", "removed": "red"}
-_EVAL_STYLE = {"unchanged": "", "fixed": "green", "regressed": "red", "changed": "yellow", "added": "", "removed": ""}
+_EVAL_STYLE = {"unchanged": "", "fixed": "green", "broken": "red", "changed": "yellow", "added": "", "removed": ""}
 
 
 def print_replay(console: Console, replay: dict[str, Any]) -> None:
@@ -129,6 +129,16 @@ def print_replay(console: Console, replay: dict[str, Any]) -> None:
     console.print(f"overrides: {escape(shown)}")
     if replay.get("dataset_content_hash"):
         console.print(f"dataset content hash: {replay['dataset_content_hash']} (same dataset version as the original)")
+    provenance = replay.get("provenance") or {}
+    ran = provenance.get("replay") or {}
+    if ran.get("code_sha256"):
+        same = {True: "same as the original", False: "DIFFERENT from the original", None: "original not recorded"}
+        console.print(
+            f"code: {escape(str(ran['code_version']))} / source {ran['code_sha256'][:12]} "
+            f"({same[provenance.get('same_code')]})"
+        )
+    for warning in provenance.get("warnings", []):
+        console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
     if replay["error_message"]:
         console.print(f"[red]Replay failed:[/red] {escape(replay['error_message'])}")
     diff = replay.get("diff")

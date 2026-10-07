@@ -9,8 +9,17 @@ from pathlib import Path
 import pytest
 
 from agentforge_cli.replay_io import OverrideArgsError, build_overrides, parse_value
-from agentforge_sdk.replay import OverrideError, Setting, replay_settings, replayable, validate_overrides
-from agentforge_worker.adapters import PythonAdapter, check_overrides
+from agentforge_sdk.replay import (
+    OverrideError,
+    ReplaySettings,
+    Setting,
+    describe_declaration,
+    replay_settings,
+    replayable,
+    validate_overrides,
+)
+from agentforge_worker.adapters import HttpAdapter, PythonAdapter, check_overrides
+from agentforge_worker.runner import replay_options
 from invoice_agent import adapter as invoice
 from invoice_agent.agent import V1, V1_WITHOUT_D2, V2
 from rag_app import adapter as rag
@@ -169,3 +178,45 @@ def test_cli_flags_become_overrides(tmp_path: Path) -> None:
     bad.write_text("- 1\n", encoding="utf-8")
     with pytest.raises(OverrideArgsError, match="must contain a YAML/JSON object"):
         build_overrides([], None, bad)
+
+
+def test_a_recorded_declaration_validates_like_the_adapter() -> None:
+    """What the worker records with a run, rebuilt by the API, accepts and rejects the same overrides
+    (except cross-setting checks, which can't be recorded -- the worker still runs those)."""
+    for fn in (invoice.answer_v1_without_d2, rag.answer, _adapter):
+        declared = replay_settings(fn)
+        assert declared is not None
+        rebuilt = ReplaySettings.from_description(declared.describe())
+        assert rebuilt.describe() == declared.describe()
+    rebuilt = ReplaySettings.from_description(DECLARED.describe())  # type: ignore[union-attr]
+    assert rebuilt.validate({"flag": "on", "config": {"depth": 2}}) == {"flag": True, "config": {"depth": 2}}
+    with pytest.raises(OverrideError, match="'k' must be <= 5"):
+        rebuilt.validate({"k": 6})
+    rag_rebuilt = ReplaySettings.from_description(replay_settings(rag.answer).describe())  # type: ignore[union-attr]
+    assert rag_rebuilt.check is None
+    assert rag_rebuilt.validate({"top_k": 1, "retrieval_config": {"top_k": 2}})  # only the worker refuses this
+
+
+def test_defaults_and_the_recorded_declaration() -> None:
+    with pytest.raises(ValueError, match="defaults for undeclared settings"):
+        replayable(Setting("x", "bool"), defaults={"y": True})
+    recorded = describe_declaration(replay_settings(rag.answer), reason_if_none="-")
+    assert recorded["overrides_supported"] is True and recorded["worker_checks"] is True
+    assert recorded["settings"][0] == {
+        "name": "top_k",
+        "kind": "int",
+        "description": "Documents to retrieve",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 2,
+    }
+    assert describe_declaration(None, reason_if_none="none declared") == {
+        "overrides_supported": False,
+        "reason": "none declared",
+        "settings": [],
+        "worker_checks": False,
+    }
+    assert replay_options(HttpAdapter("http://127.0.0.1:1/x"))["reason"].startswith("HTTP adapters can't declare")
+    assert replay_options(PythonAdapter("rag_app.fault_injection:answer"))["reason"].startswith(
+        "the adapter declares no replay settings"
+    )

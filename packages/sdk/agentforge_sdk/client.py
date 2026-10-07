@@ -13,12 +13,14 @@ import httpx
 
 
 class ApiError(Exception):
-    """A non-2xx API response, with the server's `detail` message."""
+    """A non-2xx API response, with the server's `detail` message. A
+    structured detail ({"message": ..., ...}) is kept whole in `data`."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, detail: str, data: Any = None) -> None:
         super().__init__(f"{status_code}: {detail}")
         self.status_code = status_code
         self.detail = detail
+        self.data = data
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -28,6 +30,8 @@ def _raise_for_status(response: httpx.Response) -> None:
         detail = response.json().get("detail", response.text)
     except ValueError:
         detail = response.text
+    if isinstance(detail, dict) and "message" in detail:
+        raise ApiError(response.status_code, str(detail["message"]), detail)
     raise ApiError(response.status_code, str(detail))
 
 
@@ -166,5 +170,10 @@ class AgentForgeClient:
 
     def list_replays(self, result_id: str) -> list[dict[str, Any]]:
         resp = self._client.get(f"/results/{result_id}/replays")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def get_replay_options(self, result_id: str) -> dict[str, Any]:
+        resp = self._client.get(f"/results/{result_id}/replay-options")
         _raise_for_status(resp)
         return resp.json()

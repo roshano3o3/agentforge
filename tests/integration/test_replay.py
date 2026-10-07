@@ -215,31 +215,100 @@ async def test_replay_without_overrides_reproduces_every_case(run, replay, file:
     ],
 )
 async def test_overrides_the_adapter_did_not_declare_are_rejected(
-    run, replay, client: AsyncClient, overrides: dict, message: str
+    run, client: AsyncClient, queue, overrides: dict, message: str
 ) -> None:
     original_run = await run("invoice_agent_safety_v1.yaml", "invoice_agent.adapter:answer_v1_without_d2")
     original = _case(original_run, PR4_CASE)
-    r = await replay(original["id"], overrides)
-    assert r["status"] == "failed"
-    assert r["error_message"].startswith("overrides rejected: adapter 'invoice_agent.adapter:answer_v1_without_d2':")
-    assert message in r["error_message"]
-    assert r["steps"] == [] and r["metrics"] == [] and r["diff"] is None and r["result_status"] is None
-    # The agent never ran: only the API's and the worker's replay spans exist.
-    [root] = r["spans"]
-    assert [c["name"] for c in root["children"]] == ["agentforge.replay"]
-    assert root["children"][0]["children"] == []
+    resp = await client.post("/replay", json={"result_id": original["id"], "overrides": overrides})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["message"].startswith("overrides rejected: adapter 'invoice_agent.adapter:answer_v1_without_d2':")
+    assert message in detail["message"]
+    assert [s["name"] for s in detail["accepted_settings"]] == ["behavior", "d1", "d2", "d3", "d4", "d5"]
+    # Nothing was created or queued, and the original is untouched.
+    assert queue.enqueued_replays == []
+    assert (await client.get(f"/results/{original['id']}/replays")).json() == []
     assert (await client.get(f"/runs/{original_run['id']}")).json() == original_run
 
 
-async def test_an_adapter_without_declared_settings_takes_no_overrides(run, replay) -> None:
+async def test_the_worker_checks_overrides_again(
+    run, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """The second check: a replay that reaches the worker with overrides the adapter
+    doesn't accept (e.g. written past the API) fails there, and the agent never runs."""
+    original_run = await run("invoice_agent_safety_v1.yaml", "invoice_agent.adapter:answer_v1_without_d2")
+    original = _case(original_run, PR4_CASE)
+    async with session_factory() as session:
+        bad = Replay(
+            original_result_id=original["id"],
+            original_run_id=original_run["id"],
+            test_case_id=original["test_case_id"],
+            dataset_version_id=original_run["dataset_version_id"],
+            adapter_type="python",
+            adapter_target="invoice_agent.adapter:answer_v1_without_d2",
+            evaluators=original_run["evaluators"],
+            provider_type="local-deterministic",
+            threshold=0.7,
+            overrides={"temperature": 0.2},
+        )
+        session.add(bad)
+        await session.commit()
+    assert await execute_replay(session_factory, bad.id) == "failed"
+    r = (await client.get(f"/replays/{bad.id}")).json()
+    assert r["error_message"].startswith("overrides rejected: adapter 'invoice_agent.adapter:answer_v1_without_d2':")
+    assert "unknown setting 'temperature' (accepted: behavior, d1, d2, d3, d4, d5)" in r["error_message"]
+    assert r["steps"] == [] and r["metrics"] == [] and r["diff"] is None and r["result_status"] is None
+    [worker_span] = r["spans"]  # no API span (it bypassed the API); the agent never ran
+    assert worker_span["name"] == "agentforge.replay" and worker_span["children"] == []
+
+
+async def test_replay_options_are_recorded_with_the_run(run, client: AsyncClient) -> None:
+    pr4 = await run("invoice_agent_safety_v1.yaml", "invoice_agent.adapter:answer_v1_without_d2")
+    options = (await client.get(f"/results/{_case(pr4, PR4_CASE)['id']}/replay-options")).json()
+    assert options["recorded"] is True and options["overrides_supported"] is True and options["reason"] is None
+    assert options["case_key"] == PR4_CASE and options["worker_checks"] is False
+    by_name = {s["name"]: s for s in options["settings"]}
+    assert by_name["behavior"]["kind"] == "choice"
+    assert by_name["behavior"]["choices"] == ["v1", "v2", "v1-without-d2"]
+    # Defaults are this adapter's own: v1 with only D2 off.
+    assert {n: s["default"] for n, s in by_name.items()} == {
+        "behavior": "v1-without-d2",
+        "d1": True,
+        "d2": False,
+        "d3": True,
+        "d4": True,
+        "d5": True,
+    }
+
+    rag = await run("rag_support_v1.yaml", "rag_app.adapter:answer")
+    rag_options = (await client.get(f"/results/{rag['results'][0]['id']}/replay-options")).json()
+    assert rag_options["worker_checks"] is True  # "set top_k once" runs in the worker
+    config = next(s for s in rag_options["settings"] if s["name"] == "retrieval_config")
+    assert [(f["name"], f["default"], f["maximum"]) for f in config["fields"]] == [
+        ("top_k", 2, 10),
+        ("min_score", 1, 20),
+    ]
+
+    plain = await run("fault_injection_demo.yaml", "rag_app.fault_injection:answer")
+    plain_options = (await client.get(f"/results/{plain['results'][0]['id']}/replay-options")).json()
+    assert plain_options["recorded"] is True and plain_options["overrides_supported"] is False
+    assert "declares no replay settings" in plain_options["reason"] and plain_options["settings"] == []
+
+    http_run = await run("rag_support_v1.yaml", "http://127.0.0.1:1/answer", adapter_type="http")
+    http_options = (await client.get(f"/results/{http_run['results'][0]['id']}/replay-options")).json()
+    assert http_options["overrides_supported"] is False and "HTTP adapters can't declare" in http_options["reason"]
+    assert (await client.get("/results/nope/replay-options")).status_code == 404
+
+
+async def test_an_adapter_without_declared_settings_takes_no_overrides(run, client: AsyncClient) -> None:
     original_run = await run("fault_injection_demo.yaml", "rag_app.fault_injection:answer")
-    r = await replay(original_run["results"][0]["id"], {"top_k": 3})
-    assert r["status"] == "failed"
-    assert "adapter 'rag_app.fault_injection:answer' declares no replay settings" in r["error_message"]
-    assert "replay it without overrides" in r["error_message"]
+    resp = await client.post("/replay", json={"result_id": original_run["results"][0]["id"], "overrides": {"top_k": 3}})
+    assert resp.status_code == 400
+    assert "the adapter declares no replay settings" in resp.json()["detail"]["message"]
+    assert resp.json()["detail"]["accepted_settings"] == []
 
 
-async def test_rag_retrieval_overrides(run, replay) -> None:
+async def test_rag_retrieval_overrides(run, replay, client: AsyncClient) -> None:
     original_run = await run("rag_support_v1.yaml", "rag_app.adapter:answer")
     original = max(original_run["results"], key=lambda r: len(r["retrieved_doc_ids"]))
     assert len(original["retrieved_doc_ids"]) == 2  # TOP_K
@@ -253,12 +322,58 @@ async def test_rag_retrieval_overrides(run, replay) -> None:
     narrow = await replay(original["id"], {"retrieval_config": {"top_k": 1}})
     assert narrow["retrieved_doc_ids"] == original["retrieved_doc_ids"][:1]
 
+    # A rule across settings can't be recorded: the API lets it through and the worker rejects it.
     both = await replay(original["id"], {"top_k": 1, "retrieval_config": {"top_k": 2}})
     assert both["status"] == "failed" and "top_k is set both directly and in retrieval_config" in both["error_message"]
-    bad = await replay(original["id"], {"retrieval_config": {"min_score": 99, "rerank": True}})
-    assert bad["status"] == "failed"
-    assert "'retrieval_config.min_score' must be <= 20, got 99" in bad["error_message"]
-    assert "unknown setting 'retrieval_config.rerank' (accepted: min_score, top_k)" in bad["error_message"]
+    bad = await client.post(
+        "/replay",
+        json={"result_id": original["id"], "overrides": {"retrieval_config": {"min_score": 99, "rerank": True}}},
+    )
+    assert bad.status_code == 400
+    message = bad.json()["detail"]["message"]
+    assert "'retrieval_config.min_score' must be <= 20, got 99" in message
+    assert "unknown setting 'retrieval_config.rerank' (accepted: min_score, top_k)" in message
+
+
+async def test_runs_and_replays_record_what_they_ran(
+    run, replay, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agentforge_worker import provenance
+
+    original_run = await run("invoice_agent_v1.yaml", "invoice_agent.adapter:answer_v1")
+    recorded = original_run["provenance"]
+    assert recorded["code_sha256"] == provenance.code_sha256("python", "invoice_agent.adapter:answer_v1")
+    assert recorded["code_version"] == provenance.code_version()
+    result_id = original_run["results"][0]["id"]
+
+    same = await replay(result_id)
+    assert same["provenance"]["replay"] == recorded
+    assert same["provenance"]["same_code"] is True and same["provenance"]["same_pricing"] is True
+    assert same["provenance"]["warnings"] == []
+
+    # The worker now runs other code and another pricing file: the replay says so.
+    monkeypatch.setattr(
+        provenance,
+        "collect",
+        lambda *_: {"code_version": "abc1234-dirty", "code_sha256": "f" * 64, "pricing_sha256": "e" * 64},
+    )
+    changed = await replay(result_id)
+    assert changed["diff"]["identical"] is True  # same outcome -- the warning is about provenance, not the result
+    prov = changed["provenance"]
+    assert prov["same_code"] is False and prov["same_pricing"] is False
+    assert prov["warnings"][0].startswith("This replay ran different code than the original run")
+    assert "replay: abc1234-dirty / source ffffffffffff" in prov["warnings"][0]
+    assert prov["warnings"][1].startswith("This replay used a different pricing file")
+
+    # A run that didn't record its code: the replay can't tell, and says that.
+    monkeypatch.setattr(
+        provenance, "collect", lambda *_: {"code_version": None, "code_sha256": None, "pricing_sha256": None}
+    )
+    unrecorded_run = await run("invoice_agent_v1.yaml", "invoice_agent.adapter:answer_v1")
+    monkeypatch.undo()
+    unknown = await replay(unrecorded_run["results"][0]["id"])
+    assert unknown["provenance"]["same_code"] is None
+    assert unknown["provenance"]["warnings"][0].startswith("The original run didn't record what code it ran")
 
 
 async def test_replay_requests_the_api_rejects(
@@ -276,7 +391,7 @@ async def test_replay_requests_the_api_rejects(
     result_id = http_run["results"][0]["id"]
     refused = await client.post("/replay", json={"result_id": result_id, "overrides": {"top_k": 3}})
     assert refused.status_code == 400
-    assert "http adapter, which can't declare replay settings" in refused.json()["detail"]
+    assert "HTTP adapters can't declare replay settings" in refused.json()["detail"]["message"]
     assert queue.enqueued_replays == []
     assert (await client.post("/replay", json={"result_id": result_id})).status_code == 202
 
@@ -301,6 +416,9 @@ async def test_replay_requests_the_api_rejects(
         await session.commit()
     unfinished = await client.post("/replay", json={"result_id": partial.id})
     assert unfinished.status_code == 409 and "is still running" in unfinished.json()["detail"]
+    # Not finished, so nothing recorded yet: the options say so rather than guess.
+    options = (await client.get(f"/results/{partial.id}/replay-options")).json()
+    assert options["recorded"] is False and "didn't record its adapter's replay settings" in options["reason"]
 
     # Redis down: the replay is created, marked failed, and the caller gets a 503.
     queue.fail_with = "redis unreachable"

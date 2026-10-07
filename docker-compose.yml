@@ -61,6 +61,9 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+      args:
+        # Set by scripts/docker-up.ps1, test.ps1 and test-ui.ps1 (scripts/git-sha.ps1).
+        AGENTFORGE_GIT_SHA: ${AGENTFORGE_GIT_SHA:-}
     restart: unless-stopped
     environment:
       AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}

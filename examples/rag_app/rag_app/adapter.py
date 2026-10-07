@@ -37,7 +37,7 @@ def _one_top_k(values: dict[str, Any]) -> None:
         raise OverrideError("top_k is set both directly and in retrieval_config; set it once")
 
 
-_TOP_K = Setting("top_k", "int", "Documents to retrieve", minimum=1, maximum=10)
+_TOP_K = Setting("top_k", "int", "Documents to retrieve", minimum=1, maximum=10, default=TOP_K)
 
 
 @replayable(
@@ -46,7 +46,10 @@ _TOP_K = Setting("top_k", "int", "Documents to retrieve", minimum=1, maximum=10)
         "retrieval_config",
         "object",
         "Retrieval settings",
-        fields=(_TOP_K, Setting("min_score", "int", "Minimum keyword overlap for a document", minimum=1, maximum=20)),
+        fields=(
+            _TOP_K,
+            Setting("min_score", "int", "Minimum keyword overlap for a document", minimum=1, maximum=20, default=1),
+        ),
     ),
     check=_one_top_k,
 )

@@ -54,7 +54,7 @@ test("trace explorer: PR #4's failing injection case, opened from the Safety das
 
   await expect(page.getByRole("heading", { name: "Trace", level: 1 })).toBeVisible();
   await expect(page.getByText(CASE)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Replay" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Replay" })).toBeEnabled();
 
   // The failing span: delete_invoice, in red, with the evaluator's reason beside it.
   const del = page.locator('tr[data-span-name="execute_tool delete_invoice"]');

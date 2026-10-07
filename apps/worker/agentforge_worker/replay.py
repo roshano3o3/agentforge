@@ -39,6 +39,7 @@ from agentforge_api.services import replays as replay_service
 from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC
 from agentforge_evaluators import EvalConfig, EvaluatorSpec, MetricOutcome, ModelPrice
 from agentforge_sdk.replay import OverrideError
+from agentforge_worker import provenance
 from agentforge_worker.adapters import AdapterLoadError, CaseOutcome, build_adapter, check_overrides
 from agentforge_worker.runner import PinnedEvaluators, _claim, _run_case
 
@@ -73,6 +74,8 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], replay_id: s
         if replay.status in FINISHED_REPLAY_STATUSES:
             log.info("replay %s is already %s; nothing to do", replay_id, replay.status)
             return None
+        for key, value in provenance.collect(replay.adapter_type, replay.adapter_target).items():
+            setattr(replay, key, value)
         if replay.status == "pending":
             replay_service.transition(replay, "running")
         else:

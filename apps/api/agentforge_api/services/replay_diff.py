@@ -79,7 +79,7 @@ def _metric_change(name: str, before: MetricScoreOut | None, after: MetricScoreO
     elif b.passed is False and a.passed is True:
         change = "fixed"
     elif b.passed is True and a.passed is False:
-        change = "regressed"
+        change = "broken"
     elif _same_metric(name, b, a):
         change = "unchanged"
     else:

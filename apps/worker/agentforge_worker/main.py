@@ -18,6 +18,7 @@ from agentforge_api.config import get_settings
 from agentforge_api.db.base import async_session_factory
 from agentforge_api.queue import EXECUTE_REPLAY_JOB, EXECUTE_RUN_JOB
 from agentforge_evaluators import ModelPrice, parse_pricing
+from agentforge_worker import provenance
 from agentforge_worker.replay import execute_replay
 from agentforge_worker.runner import execute_run
 
@@ -49,6 +50,7 @@ def load_pricing(path: str | None) -> dict[str, ModelPrice]:
 
 async def startup(ctx: dict) -> None:
     ctx["pricing"] = load_pricing(os.environ.get("AGENTFORGE_PRICING_FILE"))
+    provenance.pricing_sha256()  # hash the pricing file as loaded, once (recorded on runs and replays)
     collector = tracing.setup("agentforge-worker")
     log.info(
         "tracing: %s",

@@ -10,6 +10,9 @@ import type {
   EvaluatorConfig,
   RegressionReport,
   ReleaseDecision,
+  Replay,
+  ReplayOptions,
+  ReplaySummary,
   RunCreateInput,
   SafetyBlock,
   Scenario,
@@ -25,6 +28,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status?: number,
+    /** A structured `detail` ({message, ...}), e.g. a rejected replay's accepted_settings. */
+    public data?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -46,13 +51,19 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     let detail = response.statusText;
+    let data: Record<string, unknown> | undefined;
     try {
       const body = await response.json();
-      detail = body.detail ?? detail;
+      if (body.detail && typeof body.detail === "object" && "message" in body.detail) {
+        data = body.detail;
+        detail = String(body.detail.message);
+      } else {
+        detail = typeof body.detail === "string" ? body.detail : (JSON.stringify(body.detail) ?? detail);
+      }
     } catch {
       // response body wasn't JSON; fall back to statusText
     }
-    throw new ApiError(`${response.status}: ${detail}`, response.status);
+    throw new ApiError(`${response.status}: ${detail}`, response.status, data);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -194,4 +205,24 @@ export function listReleaseDecisions(candidateRunId: string): Promise<ReleaseDec
 /** A case's span tree; `resultId` is the case's result id in its run (results[].id). */
 export function getTrace(resultId: string): Promise<Trace> {
   return apiFetch<Trace>(`/traces/${encodeURIComponent(resultId)}`);
+}
+
+// -- failure replay ------------------------------------------------------------------
+
+/** What a replay of this result may override (the run's recorded adapter declaration). */
+export function getReplayOptions(resultId: string): Promise<ReplayOptions> {
+  return apiFetch<ReplayOptions>(`/results/${encodeURIComponent(resultId)}/replay-options`);
+}
+
+/** Queues a replay (202); 400 with {message, accepted_settings} if the overrides don't match. */
+export function createReplay(resultId: string, overrides: Record<string, unknown>): Promise<Replay> {
+  return post<Replay>("/replay", { result_id: resultId, overrides });
+}
+
+export function getReplay(replayId: string): Promise<Replay> {
+  return apiFetch<Replay>(`/replays/${encodeURIComponent(replayId)}`);
+}
+
+export function listReplays(resultId: string): Promise<ReplaySummary[]> {
+  return apiFetch<ReplaySummary[]>(`/results/${encodeURIComponent(resultId)}/replays`);
 }

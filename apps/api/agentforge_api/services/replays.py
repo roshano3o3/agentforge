@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from agentforge_api.models.dataset import TestCase
-from agentforge_api.models.evaluation import EvaluationResult
+from agentforge_api.models.evaluation import EvaluationResult, EvaluationRun
 from agentforge_api.models.replay import FINISHED_REPLAY_STATUSES, Replay, ReplaySpan
 from agentforge_api.services.replay_diff import CaseSide, compute_diff
 from agentforge_api.services.span_tree import span_tree
@@ -26,8 +26,10 @@ from agentforge_core.schemas import (
     LOCAL_DETERMINISTIC,
     AgentStepOut,
     MetricScoreOut,
+    ProvenanceOut,
     ReplayDiffOut,
     ReplayOut,
+    ReplayProvenanceOut,
     ReplaySummaryOut,
     ResultStatus,
 )
@@ -122,6 +124,47 @@ def diff_for(replay: Replay, original: EvaluationResult) -> ReplayDiffOut | None
     return compute_diff(before, after)
 
 
+def _short(p: ProvenanceOut) -> str:
+    sha = f" / source {p.code_sha256[:12]}" if p.code_sha256 else ""
+    return f"{p.code_version}{sha}"
+
+
+def provenance_for(replay: Replay, run: EvaluationRun) -> ReplayProvenanceOut:
+    """Did the replay run the same code and pricing as the original run?"""
+    original = ProvenanceOut(
+        code_version=run.code_version, code_sha256=run.code_sha256, pricing_sha256=run.pricing_sha256
+    )
+    after = ProvenanceOut(
+        code_version=replay.code_version, code_sha256=replay.code_sha256, pricing_sha256=replay.pricing_sha256
+    )
+    warnings: list[str] = []
+    same_code = same_pricing = None
+    if after.code_sha256 is None:
+        pass  # the replay hasn't started (or failed before it did): nothing to compare yet
+    elif original.code_sha256 is None:
+        warnings.append(
+            "The original run didn't record what code it ran (it predates this check), so this replay may have run "
+            "different code or pricing; differences may not come from the overrides alone."
+        )
+    else:
+        same_code = original.code_sha256 == after.code_sha256
+        same_pricing = original.pricing_sha256 == after.pricing_sha256
+        if not same_code:
+            warnings.append(
+                f"This replay ran different code than the original run (original: {_short(original)}; replay: "
+                f"{_short(after)}). Differences may come from the code change, not only the overrides."
+            )
+        if not same_pricing:
+            warnings.append(
+                "This replay used a different pricing file than the original run "
+                f"({(original.pricing_sha256 or 'none')[:12]} -> {(after.pricing_sha256 or 'none')[:12]}); "
+                "estimated cost isn't comparable."
+            )
+    return ReplayProvenanceOut(
+        original=original, replay=after, same_code=same_code, same_pricing=same_pricing, warnings=warnings
+    )
+
+
 def _summary(replay: Replay, original: EvaluationResult, case_key: str, diff: ReplayDiffOut | None) -> ReplaySummaryOut:
     return ReplaySummaryOut(
         id=replay.id,
@@ -155,6 +198,8 @@ async def to_out(session: AsyncSession, replay: Replay) -> ReplayOut:
     assert test_case is not None
     diff = diff_for(replay, original)
     summary = _summary(replay, original, test_case.case_key, diff)
+    run = await session.get(EvaluationRun, replay.original_run_id)
+    assert run is not None
     spans = list(await session.scalars(select(ReplaySpan).where(ReplaySpan.replay_id == replay.id)))
     steps_by_span = {s.span_id: s.step_index for s in replay.steps if s.span_id}
     return ReplayOut(
@@ -181,5 +226,6 @@ async def to_out(session: AsyncSession, replay: Replay) -> ReplayOut:
         trace_id=replay.trace_id,
         spans=span_tree(spans, steps_by_span),
         started_at=replay.started_at,
+        provenance=provenance_for(replay, run),
         diff=diff,
     )

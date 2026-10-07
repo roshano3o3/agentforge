@@ -64,6 +64,14 @@ class EvaluationRun(Base):
     status: Mapped[RunStatus] = mapped_column(SAEnum(RunStatus), default=RunStatus.pending, nullable=False)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     aggregates: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Recorded by the worker when it starts the run (agentforge_worker.provenance):
+    # what code and pricing it ran with. NULL for runs before migration e7c1a4b95d23.
+    code_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pricing_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The adapter's declared replay settings, as the worker loaded it
+    # (agentforge_sdk.replay.describe_declaration). NULL: not recorded.
+    replay_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

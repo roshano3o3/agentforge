@@ -75,6 +75,10 @@ class Replay(Base):
     error_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     case_error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # What the replay ran with (agentforge_worker.provenance), set when it starts.
+    code_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pricing_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

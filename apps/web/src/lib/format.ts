@@ -28,3 +28,15 @@ export function formatValue(value: number | null, unit: string | null): string {
 export function isActive(status: RunStatus): boolean {
   return status === "pending" || status === "running";
 }
+
+/** A replay override value as the form, the replay page and the list show it (booleans as on/off). */
+export function formatOverrideValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "on" : "off";
+  if (typeof value === "string") return value.length > 40 ? `${value.slice(0, 39)}…` : value;
+  return JSON.stringify(value);
+}
+
+export function formatOverrides(overrides: Record<string, unknown>): string {
+  const entries = Object.entries(overrides);
+  return entries.length ? entries.map(([k, v]) => `${k}=${formatOverrideValue(v)}`).join(", ") : "none";
+}

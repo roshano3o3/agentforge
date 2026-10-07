@@ -126,7 +126,7 @@ def test_changed_args_added_steps_and_regressions() -> None:
         side(after, [metric("tool_args", False, 0.0, "amount is a string"), metric("new_only", None)], passed=False),
     )
     assert [(e.evaluator_name, e.change) for e in diff.evaluators] == [
-        ("tool_args", "regressed"),
+        ("tool_args", "broken"),
         ("old_only", "removed"),
         ("new_only", "added"),
     ]
@@ -201,3 +201,17 @@ def test_cli_prints_the_diff() -> None:
     assert "removed" in out and 'delete_invoice {"invoice_id": "INV-1004"}' in out
     assert "Final answer: unchanged" in out
     assert "fixture-based" in out
+
+    # Different code than the original: a warning, and the code line says so.
+    replay["provenance"] = {
+        "original": {"code_version": "a" * 40, "code_sha256": "1" * 64, "pricing_sha256": None},
+        "replay": {"code_version": "b" * 40, "code_sha256": "2" * 64, "pricing_sha256": None},
+        "same_code": False,
+        "same_pricing": True,
+        "warnings": ["This replay ran different code than the original run (...)."],
+    }
+    console = Console(record=True, width=200, color_system=None)
+    print_replay(console, replay)
+    out = console.export_text()
+    assert f"code: {'b' * 40} / source 222222222222 (DIFFERENT from the original)" in out
+    assert "Warning: This replay ran different code than the original run" in out

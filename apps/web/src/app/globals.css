@@ -804,3 +804,121 @@ mark.redacted {
   border: 1px dashed var(--muted);
   color: var(--muted);
 }
+
+/* -- failure replay ------------------------------------------------------------------ */
+
+.replay-panel {
+  margin: 12px 0 20px;
+}
+
+.replay-form textarea {
+  width: 100%;
+  font: inherit;
+}
+
+.replay-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.replay-object {
+  margin: 8px 0;
+}
+
+.state-box.warning {
+  border-color: #b7791f;
+  background: #fffaf0;
+  color: #744210;
+  margin-bottom: 12px;
+}
+
+.replay-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.verdict-big {
+  font-size: 1.1rem;
+  padding: 4px 12px;
+}
+
+.verdict-arrow {
+  font-size: 1.4rem;
+}
+
+.change-fixed td {
+  background: #f0fff4;
+}
+
+.change-broken td {
+  background: #fff5f5;
+}
+
+.change-changed td {
+  background: #fffaf0;
+}
+
+.replay-trajectory td {
+  vertical-align: top;
+  width: 40%;
+}
+
+.replay-trajectory td:nth-child(2) {
+  width: 20%;
+}
+
+.replay-trajectory .step-removed td:first-child {
+  background: #fff5f5;
+  text-decoration: line-through;
+  color: #9b2c2c;
+}
+
+.replay-trajectory .step-added td:last-child {
+  background: #f0fff4;
+  color: #276749;
+}
+
+.replay-trajectory .step-changed td {
+  background: #fffaf0;
+}
+
+.step-number-inline {
+  display: inline-block;
+  min-width: 1.6em;
+  text-align: center;
+  border-radius: 999px;
+  background: #edf2f7;
+  font-size: 0.8rem;
+}
+
+.answer-diff {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.answer-diff.side-by-side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.answer-diff del {
+  background: #fed7d7;
+  color: #9b2c2c;
+}
+
+.answer-diff ins {
+  background: #c6f6d5;
+  color: #276749;
+  text-decoration: none;
+}
+
+.replay-current td {
+  background: #ebf8ff;
+}
