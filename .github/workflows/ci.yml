@@ -175,9 +175,27 @@ jobs:
       - name: npm ci
         working-directory: apps/web
         run: npm ci
+      # The browser download once hung until the job timed out (25 min): cache it per
+      # Playwright version, and give each install attempt 5 minutes, with one retry.
+      - name: Playwright version
+        id: playwright-version
+        working-directory: apps/web
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}-chromium
       - name: Install Chromium
         working-directory: apps/web
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 11
+        # With a cache hit the download is skipped; --with-deps still installs the system packages.
+        run: |
+          for attempt in 1 2; do
+            if timeout 5m npx playwright install --with-deps chromium; then exit 0; fi
+            echo "::warning::playwright install attempt $attempt failed or timed out"
+          done
+          exit 1
 
       - name: Playwright
         working-directory: apps/web
