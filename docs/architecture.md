@@ -1,4 +1,4 @@
-# Architecture — through Phase 7 part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay)
+# Architecture — through Phase 7 and Benchmarks part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmark harness)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -296,6 +296,38 @@ shape. A replay without overrides calls the adapter with exactly the
 arguments the run used, which is what makes the determinism check
 (`diff.identical`) meaningful.
 
+## Adapter settings, the cost cap, and the LLM planner (Benchmarks part A)
+
+A run can carry **adapter settings** (`evaluation_runs.adapter_settings`,
+migration `f8b2d6c43a19`): the same contract as replay overrides, applied to
+every case. The worker checks them against the adapter's declaration before
+the first case (`adapter settings rejected: ...` fails the run) and passes
+them as `overrides=`. A replay copies the run's settings onto its row and puts
+its own overrides on top, so it starts from what the run used.
+
+`max_cost_usd` caps a run: after each case the worker estimates that case's
+spend from the tokens and model the adapter reported and the pricing file
+(`agentforge_evaluators.cost_usd`, the estimated_cost formula), and fails the
+run -- results so far kept -- once the total passes the cap, or as soon as a
+case's spend can't be measured (an error, no tokens, no price). It's checked
+between cases, never mid-case.
+
+```
+agentforge compare --models ...  (CLI)
+  -> skip models without a key / Ollama / price; estimate; refuse over --max-cost unless --yes
+  -> per model x dataset x repeat: POST /runs {adapter: answer_llm, adapter_settings: {provider, model,
+     temperature, prompt?}, max_cost_usd: budget left}; poll; add the run's spend
+  -> table + benchmarks/<date>-compare-<hash>.json (validated against benchmark_schema.json)
+
+worker -> invoice_agent.adapter:answer_llm(input, scenario, overrides=settings)
+  LangGraph: agent node = one model call (invoice_agent.llm: OpenAI / Anthropic / Ollama SDKs),
+  ToolNode = the same mock tools; D3 filters and guards tools in code, D1/D2/D4/D5 are prompt text
+```
+
+Provider keys reach only the worker's environment (docker-compose from the
+git-ignored `.env`); provider errors are re-raised scrubbed and without their
+cause, and span redaction replaces key-shaped strings as a second line.
+
 ## Reproducibility metadata recorded per run
 
 Application version, dataset version (immutable), pinned evaluator
@@ -455,5 +487,5 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Replay, a dashboard view of traces (Trace Explorer), model comparison,
+An actual model comparison (the harness exists; no model has been run),
 LLM-as-judge evaluators, authentication. See the root README.

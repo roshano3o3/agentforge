@@ -56,12 +56,19 @@ def _options(result: EvaluationResult, run: EvaluationRun, case_key: str) -> Rep
         return ReplayOptionsOut(
             **common, recorded=False, overrides_supported=False, reason=reason, settings=[], worker_checks=False
         )
+    run_settings = run.adapter_settings or {}
     return ReplayOptionsOut(
         **common,
         recorded=True,
         overrides_supported=bool(recorded["overrides_supported"]),
         reason=recorded.get("reason"),
-        settings=[ReplaySettingOut.model_validate(d) for d in recorded["settings"]],
+        # A setting the run set (its adapter_settings) defaults to the run's value: what a replay starts from.
+        settings=[
+            ReplaySettingOut.model_validate(
+                {**d, "default": run_settings[d["name"]]} if d["name"] in run_settings else d
+            )
+            for d in recorded["settings"]
+        ],
         worker_checks=bool(recorded.get("worker_checks")),
     )
 
@@ -152,6 +159,7 @@ async def create_replay(
             threshold=run.threshold,
             max_latency_ms=run.max_latency_ms,
             timeout_seconds=run.timeout_seconds,
+            adapter_settings=run.adapter_settings,
             overrides=payload.overrides,
             status="pending",
         )

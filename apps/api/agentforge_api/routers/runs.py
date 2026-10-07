@@ -86,6 +86,12 @@ async def create_run(
             ),
         )
 
+    if payload.adapter_settings and payload.adapter.type != "python":
+        # Like a replay's overrides: only python adapters can declare settings (agentforge_sdk.replay).
+        raise HTTPException(
+            status_code=400, detail="adapter_settings need a python adapter that declares them; HTTP adapters can't"
+        )
+
     # The trace starts here: this span is the root, and its context goes to
     # the worker with the job. It's stored with the run, in the same commit.
     span = tracing.tracer().start_span(
@@ -116,6 +122,8 @@ async def create_run(
             environment=payload.environment,
             threshold=payload.threshold,
             git_commit_sha=payload.git_commit_sha,
+            adapter_settings=payload.adapter_settings or None,
+            max_cost_usd=payload.max_cost_usd,
             status=RunStatus.pending,
         )
         session.add(run)

@@ -1,10 +1,11 @@
-# Per-model rates used by the `estimated_cost` evaluator. Every cost it
-# produces is an ESTIMATE: adapter-reported tokens x the rates below.
+# Per-model rates used by the `estimated_cost` evaluator, the worker's cost cap
+# and `agentforge compare`. Every cost computed from them is an ESTIMATE:
+# adapter-reported tokens x the rates below. Standard (pay-as-you-go) rates
+# only: no batch, cache, priority or regional discounts/premiums are applied.
 #
-# AgentForge deliberately ships no vendor prices: a hardcoded price goes stale
-# silently and becomes an invented number. Add the models your adapters report
-# (the adapter's `model` field must match the key exactly), with rates copied
-# from your provider's current price list:
+# Vendor prices change. Each block below says where its numbers were copied
+# from and when; re-check before trusting a cost, and update the date with
+# the numbers. A model the adapter reports must match a key exactly.
 #
 #   models:
 #     <model-name>:
@@ -12,10 +13,49 @@
 #       output_usd_per_million_tokens: <number>
 #
 # The worker reads this file at startup (AGENTFORGE_PRICING_FILE); restart the
-# worker after editing it.
+# worker (rebuild its image) after editing it.
 
 models:
   # The example RAG app calls no model, so its cost really is zero.
   local-deterministic:
+    input_usd_per_million_tokens: 0
+    output_usd_per_million_tokens: 0
+
+  # Anthropic -- copied 2026-10-07 from https://platform.claude.com/docs/en/about-claude/pricing
+  # ("Base input tokens" / "Output tokens"). Thinking tokens are billed as output tokens.
+  claude-opus-5-5:
+    input_usd_per_million_tokens: 4.00
+    output_usd_per_million_tokens: 20.00
+  claude-sonnet-5-5:
+    input_usd_per_million_tokens: 2.00
+    output_usd_per_million_tokens: 10.00
+  claude-haiku-4-5:
+    input_usd_per_million_tokens: 1.00
+    output_usd_per_million_tokens: 5.00
+
+  # OpenAI -- copied 2026-10-07 from https://developers.openai.com/api/docs/pricing
+  # (standard tier). The page shows no "last updated" date.
+  gpt-5.4:
+    input_usd_per_million_tokens: 2.50
+    output_usd_per_million_tokens: 15.00
+  gpt-5.4-mini:
+    input_usd_per_million_tokens: 0.75
+    output_usd_per_million_tokens: 4.50
+  gpt-5-mini:
+    input_usd_per_million_tokens: 0.25
+    output_usd_per_million_tokens: 2.00
+  gpt-4.1-mini:
+    input_usd_per_million_tokens: 0.40
+    output_usd_per_million_tokens: 1.60
+
+  # Ollama -- models run on your own machine: no per-token price (hardware and
+  # power aren't counted). The invoice agent reports them as "ollama/<name>".
+  ollama/llama3.2:3b:
+    input_usd_per_million_tokens: 0
+    output_usd_per_million_tokens: 0
+  ollama/llama3.1:8b:
+    input_usd_per_million_tokens: 0
+    output_usd_per_million_tokens: 0
+  ollama/qwen2.5:7b:
     input_usd_per_million_tokens: 0
     output_usd_per_million_tokens: 0

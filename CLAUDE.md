@@ -20,8 +20,11 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - SDK: `packages/sdk` (adapter contract: python `module:fn` + http, optional `steps` trajectory);
   pricing: `config/pricing.yaml`
 - Example apps: `examples/rag_app` (synthetic "Northwind Outfitters"; also `fault_injection`,
-  `http_server`); `examples/invoice_agent` (LangGraph StateGraph + ToolNode, **scripted planner, not
-  an LLM**; `answer_v1` and `answer_v2` with 5 deliberate regressions) + `datasets/invoice_agent_v1.yaml`
+  `http_server`); `examples/invoice_agent` (LangGraph StateGraph + ToolNode; **scripted planner** in
+  `answer_v1`/`answer_v2` (5 deliberate regressions) -- what CI uses -- and an **LLM planner** in `answer_llm`
+  (`llm.py` providers, `llm_planner.py`, `prompts/system.md`)) + `datasets/invoice_agent_v1.yaml`
+- Benchmarks: `agentforge compare --models` (`cli/agentforge_cli/benchmark.py`, schema
+  `benchmark_schema.json`), results JSON in `benchmarks/`; keys only in the git-ignored `.env`
 - Python 3.12, Node 18+
 
 ## Rules (non-negotiable)
@@ -57,7 +60,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-07, Phase 7 done and merged to main; next: reproducible benchmark)
+## Current status (2026-10-07, Phase 7 on main; Benchmarks part A on branch `benchmarks`)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -151,6 +154,20 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   -> `ReplayForm` (built from replay-options, defaults pre-set) -> `/replays/[id]` side-by-side diff (polls) + `ReplayList`
   (on the trace and replay pages). `replay-flow.spec.ts` (3 tests) + `docs/screenshots/replay-diff.png`. README "Failure
   replay". Tests: SQLite 309 + 21 skipped; Postgres 330; Playwright 14.
+- **Benchmarks part A on `benchmarks`** (2026-10-07): LLM planner `answer_llm` (same graph/tools/scenarios; providers
+  openai / anthropic / ollama via official SDKs; D3 in code = offer only permitted tools + block other calls, still
+  reported as a step; D1/D2/D4/D5 = prompt text; 12-turn cap; temperature sent only where accepted; Anthropic
+  refusal fallback deliberately off). Run-level `adapter_settings` + `max_cost_usd` (migration `f8b2d6c43a19`):
+  worker validates settings before any case, passes them as overrides, stops a capped run when spend passes the cap
+  or can't be measured; replays copy the run's settings (replay-options defaults = run values). `cost_usd` shared by
+  estimated_cost / worker cap / CLI. `agentforge compare --models ... --datasets ... --repeats N` (old
+  --baseline/--candidate form kept): skip without key/Ollama/price, estimate + refuse over --max-cost unless --yes,
+  JSON to benchmarks/ validated by benchmark_schema.json. Prices in config/pricing.yaml copied 2026-10-07 with
+  source URLs. Keys only in .env -> compose -> worker; errors scrubbed (`from None`), span redaction [API_KEY].
+  **No paid model run; Ollama not installed here, so no LLM result exists.** Provider fixtures in
+  tests/fixtures/llm are hand-written in API shape, not recordings. Tests: SQLite 349 + 21 skipped; Postgres 370;
+  Playwright 14 (UI unchanged).
+- Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
 - The committed screenshots had drifted since Phases 4-6 (old nav, missing evaluators); all 15 were re-captured in part B.
   When Playwright rewrites them, compare with the committed ones before deciding they changed (IDs/timestamps always do).
 - A replay without overrides must call the adapter exactly as a run does (no `overrides` kwarg): the determinism test
@@ -176,7 +193,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: PII redaction, Trace Explorer page, overhead profile)
 7. Failure replay — **done** (A: override contract, replay engine, diff, API, CLI; B: recorded replay options +
    API 400, provenance warnings, Trace Explorer Replay button, override form, side-by-side diff, replay list)
-Next: reproducible benchmark, then remaining dashboard pages.
+Benchmarks part A (harness) **done** on branch `benchmarks`; part B: actually run models (keys + a spend decision,
+or Ollama installed) and commit results JSON. Then: remaining dashboard pages.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
    screenshots, tests), K8s manifests, MCP adapter, a real model-comparison run (OpenAI / Claude /

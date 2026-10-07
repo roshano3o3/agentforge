@@ -13,7 +13,7 @@ from agentforge_evaluators.heuristic_context_precision import (
     HeuristicContextPrecisionResult,
     heuristic_context_precision,
 )
-from agentforge_evaluators.pricing import ModelPrice, PricingConfigError, parse_pricing
+from agentforge_evaluators.pricing import ModelPrice, PricingConfigError, cost_usd, parse_pricing
 from agentforge_evaluators.registry import (
     DEFAULT_EVALUATORS,
     SAFETY_EVALUATORS,
@@ -62,6 +62,7 @@ __all__ = [
     "MetricOutcome",
     "MetricRecord",
     "ModelPrice",
+    "cost_usd",
     "PricingConfigError",
     "TRAJECTORY_EVALUATORS",
     "TRAJECTORY_KEYS",

@@ -1,0 +1,14 @@
+{
+  "id": "msg_fixture_0001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-4-5",
+  "content": [
+    {"type": "thinking", "thinking": "", "signature": "fixture-signature-not-real"},
+    {"type": "text", "text": "Let me look that invoice up."},
+    {"type": "tool_use", "id": "toolu_fixture_01", "name": "get_invoice", "input": {"invoice_id": "INV-1002"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 1034, "output_tokens": 88}
+}

@@ -72,6 +72,11 @@ class EvaluationRun(Base):
     # The adapter's declared replay settings, as the worker loaded it
     # (agentforge_sdk.replay.describe_declaration). NULL: not recorded.
     replay_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Settings every case runs with, e.g. an LLM adapter's provider/model/prompt: passed to the adapter as
+    # `overrides`, checked by the worker against its replay declaration first. NULL: none.
+    adapter_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The worker stops the run once its estimated spend passes this (USD). NULL: no cap.
+    max_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

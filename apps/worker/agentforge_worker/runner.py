@@ -9,6 +9,18 @@ shows live progress. Results are always written *before* the final status
 change: once a run is completed, the DB trigger refuses any further result
 writes.
 
+Adapter settings: a run may carry settings every case runs with (e.g. an LLM
+adapter's provider and model). They're validated against the adapter's
+declaration (agentforge_sdk.replay) before any case runs -- a mismatch fails
+the run with "adapter settings rejected: ..." -- and passed as `overrides`.
+
+Cost cap: with `max_cost_usd` set, each case's spend is estimated from the
+tokens it reported and the pricing file (the same formula as estimated_cost),
+and the run stops -- failed, with the results so far kept -- as soon as the
+total passes the cap, or as soon as a case's spend can't be measured (no
+tokens, no model, no price, or the case errored), since then the cap can't be
+enforced.
+
 Tracing (agentforge_api.tracing): the run is an `agentforge.run` span,
 continuing the trace the API started (its context arrives with the job).
 Each case is an `agentforge.case` span with the agent call (`invoke_agent`)
@@ -50,12 +62,20 @@ from agentforge_evaluators import (
     ModelPrice,
     TrajectoryStep,
     compute_aggregates,
+    cost_usd,
     effective_config,
     resolve,
 )
-from agentforge_sdk.replay import describe_declaration
+from agentforge_sdk.replay import OverrideError, describe_declaration
 from agentforge_worker import provenance
-from agentforge_worker.adapters import AdapterLoadError, CaseOutcome, HttpAdapter, build_adapter, invoke
+from agentforge_worker.adapters import (
+    AdapterLoadError,
+    CaseOutcome,
+    HttpAdapter,
+    build_adapter,
+    check_overrides,
+    invoke,
+)
 
 log = logging.getLogger("agentforge.worker")
 
@@ -232,6 +252,8 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], run_id: str)
             "threshold": run.threshold,
             "max_latency_ms": run.max_latency_ms,
             "labels": run_service.run_labels(run),
+            "adapter_settings": dict(run.adapter_settings or {}),
+            "max_cost_usd": run.max_cost_usd,
         }
 
 
@@ -323,6 +345,21 @@ async def _record(
                 insert(TraceSpan), [{**v, "run_id": run_id, "evaluation_result_id": result.id} for v in spans]
             )
         await session.commit()
+
+
+def case_spend(outcome: CaseOutcome, pricing: Mapping[str, ModelPrice]) -> tuple[float | None, str]:
+    """The case's estimated spend in USD, or None with why it can't be measured."""
+    out = outcome.output
+    if outcome.status != "ok" or out is None:
+        return None, f"the case ended with status {outcome.status}, so its token usage is unknown"
+    if out.input_tokens is None and out.output_tokens is None:
+        return None, "the adapter reported no token usage"
+    if out.model is None:
+        return None, "the adapter reported no model name"
+    price = pricing.get(out.model)
+    if price is None:
+        return None, f"model '{out.model}' has no entry in the pricing file"
+    return cost_usd(price, out.input_tokens, out.output_tokens), ""
 
 
 async def _complete(
@@ -476,20 +513,50 @@ async def execute_run(
             message = f"run setup failed: {exc}"
             await _fail(session_factory, run_id, message, end_run_span(message))
             return "failed"
+        try:
+            settings = check_overrides(adapter, started["adapter_settings"], started["adapter_target"])
+        except OverrideError as exc:
+            message = f"adapter settings rejected: {exc}"
+            await adapter.aclose()
+            await _fail(session_factory, run_id, message, end_run_span(message))
+            return "failed"
 
         await _record_replay_options(session_factory, run_id, adapter)
         config = EvalConfig(
             threshold=started["threshold"], max_latency_ms=started["max_latency_ms"], pricing=pricing or {}
         )
+        cap = started["max_cost_usd"]
+        spent = 0.0
+        stopped: str | None = None
         token = otel_context.attach(trace.set_span_in_context(run_span))
         try:
-            for tc in started["cases"]:
-                outcome, scored, spans = await _run_case(adapter, tc, started, pinned, config)
+            for n, tc in enumerate(started["cases"], start=1):
+                outcome, scored, spans = await _run_case(adapter, tc, started, pinned, config, settings or None)
                 await _record(session_factory, run_id, tc, outcome, scored, started["labels"], spans)
                 log.info("run %s case %s -> %s (%.0f ms)", run_id, tc.case_key, outcome.status, outcome.latency_ms)
+                if cap is None:
+                    continue
+                usd, why = case_spend(outcome, config.pricing)
+                if usd is None:
+                    stopped = (
+                        f"stopped after case {n} of {len(started['cases'])} ({tc.case_key}): the run has a cost cap "
+                        f"(${cap:g}) but this case's spend can't be measured: {why}"
+                    )
+                    break
+                spent += usd
+                if spent > cap:
+                    stopped = (
+                        f"stopped after case {n} of {len(started['cases'])}: estimated spend ${spent:.4f} passed "
+                        f"the run's cost cap (${cap:g})"
+                    )
+                    break
         finally:
             otel_context.detach(token)
             await adapter.aclose()
+        if stopped is not None:
+            log.warning("run %s %s", run_id, stopped)
+            await _fail(session_factory, run_id, stopped, end_run_span(stopped))
+            return "failed"
 
         await _complete(session_factory, run_id, end_run_span())
         log.info("run %s completed (%d case(s))", run_id, len(started["cases"]))

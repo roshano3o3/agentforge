@@ -55,6 +55,8 @@ class Replay(Base):
     threshold: Mapped[float] = mapped_column(Float, nullable=False)
     max_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The original run's adapter settings (NULL: none). The case runs with these, then `overrides` on top.
+    adapter_settings: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # As requested; the worker validates them against the adapter's declaration.
     overrides: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 

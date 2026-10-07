@@ -95,6 +95,7 @@ async def _start(session_factory: async_sessionmaker[AsyncSession], replay_id: s
         return {
             "case": tc,
             "overrides": dict(replay.overrides or {}),
+            "adapter_settings": dict(replay.adapter_settings or {}),
             "evaluators": list(replay.evaluators),
             "original_result_id": replay.original_result_id,
             "labels": [FIXTURE_BASED_LABEL] if replay.provider_type == LOCAL_DETERMINISTIC else [],
@@ -227,7 +228,10 @@ async def execute_replay(
         try:
             pinned = PinnedEvaluators(started["evaluators"])
             adapter = build_adapter(started["adapter_type"], started["adapter_target"])
-            overrides = check_overrides(adapter, started["overrides"], started["adapter_target"])
+            # The original run's settings, with the replay's overrides on top (a run without settings and a
+            # replay without overrides call the adapter exactly as before: no `overrides` at all).
+            requested = {**started["adapter_settings"], **started["overrides"]}
+            overrides = check_overrides(adapter, requested, started["adapter_target"])
         except OverrideError as exc:
             message = f"overrides rejected: {exc}"
             if adapter is not None:

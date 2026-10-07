@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome, Params
+from agentforge_evaluators.pricing import cost_usd
 
 
 def _ms(value: float) -> str:
@@ -99,10 +100,7 @@ def estimated_cost(case: EvalInput, config: EvalConfig, params: Params) -> Metri
         )
     input_tokens = case.input_tokens or 0
     output_tokens = case.output_tokens or 0
-    usd = (
-        input_tokens / 1_000_000 * price.input_usd_per_million_tokens
-        + output_tokens / 1_000_000 * price.output_usd_per_million_tokens
-    )
+    usd = cost_usd(price, input_tokens, output_tokens)
     return MetricOutcome(
         score=None,
         passed=None,

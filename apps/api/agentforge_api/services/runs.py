@@ -187,6 +187,8 @@ async def to_detail(session: AsyncSession, run: EvaluationRun) -> EvaluationRunO
         provenance=ProvenanceOut(
             code_version=run.code_version, code_sha256=run.code_sha256, pricing_sha256=run.pricing_sha256
         ),
+        adapter_settings=run.adapter_settings,
+        max_cost_usd=run.max_cost_usd,
         results=[
             EvaluationResultOut(
                 id=r.id,

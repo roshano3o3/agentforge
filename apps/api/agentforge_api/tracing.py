@@ -22,7 +22,9 @@ PII redaction (on by default): every ended span passes through
 attributes, event attributes and the status message are run through the
 pii_leak evaluator's regex detectors (agentforge_evaluators.safety.redact_pii)
 and matches become typed placeholders -- [EMAIL], [PHONE], [SSN], [CARD],
-[ACCOUNT]; the span gets `agentforge.redaction.count` and
+[ACCOUNT] -- and anything shaped like a provider API key (sk-..., sk-ant-...)
+becomes [API_KEY] (keys never reach spans by design: the LLM providers scrub
+their errors; this is a second line); the span gets `agentforge.redaction.count` and
 `agentforge.redacted` (which attributes, what kind). Identifier attributes
 (ids, hashes) are left alone. Evaluators never read spans, so they still see
 the unredacted data during the run. AGENTFORGE_TRACE_REDACTION=off turns it
@@ -37,6 +39,7 @@ gen_ai.usage.*_tokens -- the latter only when the adapter reported them),
 from __future__ import annotations
 
 import os
+import re
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -84,10 +87,16 @@ def redaction_enabled() -> bool:
 _IDENTIFIER_SUFFIXES = (".id", "_id", ".content_hash", ".version_id", ".call.id")
 
 
+_API_KEY = re.compile(r"\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{16,})")
+
+
 def _redact_value(key: str, value: Any, found: dict[str, dict[str, int]]) -> Any:
     if not isinstance(value, str) or key.endswith(_IDENTIFIER_SUFFIXES):
         return value
+    value, keys = _API_KEY.subn("[API_KEY]", value)
     text, counts = redact_pii(value)
+    if keys:
+        counts = {**counts, "api_key": keys}
     if counts:
         entry = found.setdefault(key, {})
         for kind, n in counts.items():

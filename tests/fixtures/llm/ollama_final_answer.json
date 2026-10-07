@@ -1,0 +1,15 @@
+{
+  "id": "chatcmpl-417",
+  "object": "chat.completion",
+  "created": 1791400100,
+  "model": "llama3.1:8b",
+  "system_fingerprint": "fp_ollama",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {"role": "assistant", "content": "INV-1002 is open: 1250.00 USD, due 2026-10-20."}
+    }
+  ],
+  "usage": {"prompt_tokens": 690, "completion_tokens": 21, "total_tokens": 711}
+}

@@ -56,3 +56,10 @@ def parse_pricing(raw: object) -> dict[str, ModelPrice]:
             raise PricingConfigError(f"model '{model}': rates must be >= 0")
         prices[str(model)] = price
     return prices
+
+
+def cost_usd(price: ModelPrice, input_tokens: int | None, output_tokens: int | None) -> float:
+    """input_tokens/1e6 * input_rate + output_tokens/1e6 * output_rate (missing counts as 0). An estimate."""
+    return (input_tokens or 0) / 1_000_000 * price.input_usd_per_million_tokens + (
+        output_tokens or 0
+    ) / 1_000_000 * price.output_usd_per_million_tokens

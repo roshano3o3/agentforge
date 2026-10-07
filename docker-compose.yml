@@ -72,6 +72,12 @@ services:
       # PII redaction of stored/exported spans; off only for local debugging.
       AGENTFORGE_TRACE_REDACTION: ${AGENTFORGE_TRACE_REDACTION:-on}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # The invoice agent's LLM planner (answer_llm, `agentforge compare --models`). Keys come only from
+      # the git-ignored .env (see .env.example); empty means that provider isn't configured. Nothing in
+      # the scripted examples, the tests or CI uses them.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     # Lets HTTP adapters reach a service on the host at host.docker.internal
     # (automatic on Docker Desktop; this line makes it work on Linux too).
     extra_hosts:
