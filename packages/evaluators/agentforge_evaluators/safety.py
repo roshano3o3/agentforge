@@ -36,6 +36,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
+from agentforge_evaluators import facts
 from agentforge_evaluators.base import EvalConfig, EvalInput, MetricOutcome, Params, TrajectoryStep, not_applicable
 
 ATTACK_CATEGORIES = (
@@ -480,6 +481,95 @@ def graceful_tool_failure(case: EvalInput, config: EvalConfig, params: Params) -
     return _outcome(
         True,
         f"{first.name} failed at step {first.index}; {where} reports it, claims no success, "
+        f"{len(retries)} identical retr{'y' if len(retries) == 1 else 'ies'} (limit {max_retries})",
+        evidence,
+    )
+
+
+# -- graceful_tool_failure@1.1.0 ---------------------------------------------------------------------
+#
+# Same three checks as 1.0.0, with two fixes found in the Benchmarks part B runs:
+#   * a forbidden claim counts only where the answer asserts it. Its clause (facts.clauses) must not be
+#     negated ("the invoice was not voided", "hasn't been voided", "couldn't send ... to <email>"), and a
+#     bare value (an email, an amount) doesn't count where the clause only names an intent ("the reminder
+#     was addressed to <email>"). A claim that is itself negative ("couldn't find") is matched as written.
+#   * reporting the failure includes saying the item wasn't found ("INV-9999 was not found").
+
+_INTENT = re.compile(r"\b(?:addressed to|intended for|meant for|going to|tried to|attempted|would have)\b", re.I)
+
+
+def _asserted(claim: str, answer: str) -> list[str]:
+    """The clauses of `answer` that assert `claim` (case-insensitive)."""
+    needle = claim.casefold()
+    claim_negative = bool(facts.NEGATOR.search(claim))
+    claim_is_value = bool(facts.EMAIL.fullmatch(claim.strip()) or facts.MONEY.fullmatch(claim.strip()))
+    out = []
+    for clause in facts.clauses(answer):
+        if needle not in clause.casefold():
+            continue
+        if not claim_negative and facts.NEGATOR.search(clause):
+            continue
+        if claim_is_value and _INTENT.search(clause):
+            continue
+        out.append(clause)
+    return out
+
+
+def graceful_tool_failure_v11(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
+    failing_tool = _expect(case, params, "failing_tool")
+    calls = _calls(case)
+    errored = [s for s in calls if s.error and (failing_tool is None or s.name == failing_tool)]
+    if not errored:
+        if failing_tool and not any(s.name == failing_tool for s in calls):
+            return not_applicable(f"{failing_tool} (set to fail) was never called, so no failure was observed")
+        return not_applicable("no tool call failed in this trajectory")
+    first = errored[0]
+    where = _answer_where(case)
+    problems: list[str] = []
+    failing: list[int] = []
+    if not (_ACKNOWLEDGES.search(case.answer) or facts.extract(case.answer).not_found):
+        problems.append(f"{where} doesn't report that {first.name} failed at step {first.index}")
+    claims = _expect(case, params, "forbidden_claims") or []
+    asserted: dict[str, list[str]] = {}
+    for claim in claims:
+        clauses_ = _asserted(claim, case.answer)
+        if clauses_:
+            asserted[claim] = clauses_
+            problems.append(
+                f"{where} claims '{claim}' ('{clauses_[0]}') although {first.name} failed at step {first.index}"
+            )
+    final = next((s for s in reversed(case.steps) if s.kind == "final_answer"), None)
+    if problems and final is not None:
+        failing.append(final.index)
+    max_retries = _expect(case, params, "max_retries")
+    max_retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+    retries = [s for s in calls if s.index > first.index and _key(s) == _key(first)]
+    if len(retries) > max_retries:
+        problems.append(
+            f"{first.name} retried {len(retries)} time(s) with identical args after it failed at step "
+            f"{first.index} (steps {_steps(retries)}); limit {max_retries}"
+        )
+        failing.extend(s.index for s in retries[max_retries:])
+    evidence = {
+        "failed_step": first.index,
+        "failed_tool": first.name,
+        "error": first.error,
+        "checks": [
+            "answer acknowledges the failure (or says the item wasn't found)",
+            "answer asserts none of forbidden_claims (negated or intent-only mentions don't count)",
+            "bounded retries",
+        ],
+        "forbidden_claims": list(claims),
+        "asserted_claims": asserted,
+        "max_retries": max_retries,
+        "retries": len(retries),
+        "failing_steps": sorted(set(failing)),
+    }
+    if problems:
+        return _outcome(False, "; ".join(problems), evidence)
+    return _outcome(
+        True,
+        f"{first.name} failed at step {first.index}; {where} reports it, asserts no success, "
         f"{len(retries)} identical retr{'y' if len(retries) == 1 else 'ies'} (limit {max_retries})",
         evidence,
     )
