@@ -242,7 +242,7 @@ class EvaluationRunCreate(BaseModel):
     environment: str = Field(default="local", max_length=50)
     threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     max_latency_ms: float | None = Field(default=None, gt=0)
-    timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    timeout_seconds: float = Field(default=10.0, gt=0, le=600)
     git_commit_sha: str | None = Field(default=None, max_length=40)
     # Settings every case runs with (python adapters that declare them, agentforge_sdk.replay):
     # e.g. an LLM adapter's provider, model and prompt. The worker validates them before any case.

@@ -291,3 +291,103 @@ def test_cli_scripted_baseline_runs_without_any_key(cli_env) -> None:
 def test_compare_still_does_run_vs_run() -> None:
     res = CliRunner().invoke(main.app, ["compare"])
     assert res.exit_code != 0 and "--baseline and --candidate" in _plain(res)
+
+
+# -- plan files: per-model datasets, repeats and timeout ---------------------------------------
+
+SAFETY = {"id": "dv2", "name": "invoice-agent-safety", "version": 1, "content_hash": "sha256:" + "b" * 64, "cases": 3}
+
+
+def _write(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "plan.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_plan_file_defaults_and_per_model_entries(tmp_path: Path) -> None:
+    plan = benchmark.load_plan_file(
+        _write(
+            tmp_path,
+            "datasets: [invoice-agent, invoice-agent-safety]\nrepeats: 3\nmodels:\n"
+            "  - spec: scripted\n    repeats: 1\n"
+            "  - spec: ollama:llama3.1:8b\n    datasets: [invoice-agent]\n    repeats: 1\n    timeout_seconds: 600\n"
+            "  - spec: anthropic:claude-haiku-4-5\n",
+        )
+    )
+    assert [s.raw for s in plan.specs] == ["scripted:v1", "ollama:llama3.1:8b", "anthropic:claude-haiku-4-5"]
+    assert plan.entries["scripted:v1"] == benchmark.ModelPlan(("invoice-agent", "invoice-agent-safety"), 1)
+    assert plan.entries["ollama:llama3.1:8b"] == benchmark.ModelPlan(("invoice-agent",), 1, 600.0)
+    assert plan.entries["anthropic:claude-haiku-4-5"].repeats == 3
+    assert plan.dataset_names == ["invoice-agent", "invoice-agent-safety"]
+
+
+@pytest.mark.parametrize(
+    ("text", "problem"),
+    [
+        ("models: []\n", "'models' must be a non-empty list"),
+        ("models: [{spec: scripted}]\nextra: 1\n", "expected a mapping"),
+        ("datasets: [d]\nmodels: [{spec: scripted, colour: red}]\n", "expected 'spec'"),
+        ("datasets: [d]\nmodels: [{spec: scripted}, {spec: 'scripted:v1'}]\n", "listed twice"),
+        ("models: [{spec: scripted}]\n", "'datasets' must be a non-empty list"),
+        ("datasets: [d]\nmodels: [{spec: scripted, repeats: 0}]\n", "'repeats' must be an integer"),
+        ("datasets: [d]\nmodels: [{spec: 'ollama:x', timeout_seconds: 601}]\n", "'timeout_seconds' must be"),
+        ("datasets: [d]\nmodels: [{spec: 'bedrock:x'}]\n", "expected scripted"),
+    ],
+)
+def test_plan_file_rejections(tmp_path: Path, text: str, problem: str) -> None:
+    with pytest.raises(benchmark.BenchmarkError, match=re.escape(problem)):
+        benchmark.load_plan_file(_write(tmp_path, text))
+
+
+def test_the_committed_default_plan() -> None:
+    """benchmarks/compare.yaml: the models the README's benchmark table comes from, in run order."""
+    plan = benchmark.load_plan_file(Path(__file__).parents[2] / "benchmarks" / "compare.yaml")
+    assert [s.raw for s in plan.specs] == [
+        "scripted:v1", "ollama:llama3.1:8b", "anthropic:claude-haiku-4-5", "anthropic:claude-sonnet-5-5",
+    ]  # fmt: skip
+    assert plan.entries["ollama:llama3.1:8b"] == benchmark.ModelPlan(("invoice-agent",), 1, 600.0)
+    for spec in ("anthropic:claude-haiku-4-5", "anthropic:claude-sonnet-5-5"):
+        assert plan.entries[spec] == benchmark.ModelPlan(("invoice-agent", "invoice-agent-safety"), 3)
+
+
+def test_each_model_runs_its_own_datasets_repeats_and_timeout() -> None:
+    specs = [benchmark.parse_model_spec(s) for s in ("ollama:llama3.1:8b", "anthropic:claude-haiku-4-5")]
+    entries = {
+        "ollama:llama3.1:8b": benchmark.ModelPlan(("invoice-agent",), 1, 600.0),
+        "anthropic:claude-haiku-4-5": benchmark.ModelPlan(("invoice-agent", "invoice-agent-safety"), 2),
+    }
+    plan = benchmark.Plan(specs, {}, [DATASET, SAFETY], 1, [], entries)
+    llama = {"results": [_result(True, model="ollama/llama3.1:8b")] * 2}
+    haiku = {"results": [_result(True, model="claude-haiku-4-5")] * 2}
+    client = FakeClient([llama, haiku, haiku, haiku, haiku])
+    outcome = _execute(client, plan)
+    assert [(c["dataset_version_id"], c["timeout_seconds"]) for c in client.created] == [
+        ("dv1", 600.0), ("dv1", 90), ("dv1", 90), ("dv2", 90), ("dv2", 90),
+    ]  # fmt: skip
+    doc = benchmark.document(
+        plan, outcome, created_at=benchmark.now(), temperature=0.0, prompt_source="built-in",
+        prompt_sha256=None, max_cost=5.0, git_commit_sha=None, timeout_seconds=90,
+    )  # fmt: skip
+    benchmark.validate_document(doc)
+    assert [(m["spec"], m["datasets"], m["repeats"], m["timeout_seconds"]) for m in doc["models"]] == [
+        ("ollama:llama3.1:8b", ["invoice-agent"], 1, 600.0),
+        ("anthropic:claude-haiku-4-5", ["invoice-agent", "invoice-agent-safety"], 2, 90),
+    ]
+    assert [(r["model"], r["dataset"], len(r["runs"])) for r in doc["results"]] == [
+        ("ollama:llama3.1:8b", "invoice-agent", 1),
+        ("anthropic:claude-haiku-4-5", "invoice-agent", 2),
+        ("anthropic:claude-haiku-4-5", "invoice-agent-safety", 2),
+    ]
+
+
+def test_cli_plan_file(cli_env) -> None:
+    tmp_path, clients = cli_env
+    plan = _write(tmp_path, "datasets: [invoice-agent]\nmodels:\n  - spec: scripted\n  - spec: 'ollama:llama3.1:8b'\n")
+    res = _compare(tmp_path, "--plan", str(plan))
+    assert res.exit_code == 0, res.output
+    assert "Skipping ollama:llama3.1:8b: Ollama isn't reachable" in _plain(res)
+    assert [c["adapter"]["target"] for c in clients[-1].created] == ["invoice_agent.adapter:answer_v1"]
+    doc = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert [m["spec"] for m in doc["models"]] == ["scripted:v1", "ollama:llama3.1:8b"]
+    res = _compare(tmp_path, "--plan", str(plan), "--models", "scripted")
+    assert res.exit_code != 0 and "either --models or --plan" in _plain(res)

@@ -29,6 +29,10 @@ Cost safety:
 LLMs aren't deterministic: with --repeats > 1 each metric is reported as the
 mean with the min-max spread over the repeats. The scripted planner is.
 
+A plan file (`--plan`, e.g. benchmarks/compare.yaml) lists the models in run
+order, each with its own datasets, repeats and per-case timeout (a slow local
+model can run a smaller suite); see `load_plan_file`.
+
 The results are written as JSON to benchmarks/ (schema: benchmarks/schema.json)
 with the date, the dataset content hashes, the model ids, the prompt's sha256,
 the worker's code version and the pricing file's hash.
@@ -49,6 +53,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+import yaml
 
 from agentforge_evaluators import ModelPrice, cost_usd, percentile
 
@@ -124,6 +129,78 @@ def parse_model_spec(raw: str) -> ModelSpec:
 
 def split_list(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+@dataclass(frozen=True)
+class ModelPlan:
+    """What one model runs: its datasets (names), repeats, and per-case timeout (None: the CLI's)."""
+
+    datasets: tuple[str, ...]
+    repeats: int
+    timeout_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class PlanFile:
+    specs: list[ModelSpec]
+    entries: dict[str, ModelPlan]  # by spec.raw
+
+    @property
+    def dataset_names(self) -> list[str]:
+        """Every dataset any model runs, in first-use order."""
+        return list(dict.fromkeys(name for e in self.entries.values() for name in e.datasets))
+
+
+MAX_TIMEOUT_SECONDS = 600.0  # the API's per-case limit
+_PLAN_KEYS = {"datasets", "repeats", "models"}
+_MODEL_KEYS = {"spec", "datasets", "repeats", "timeout_seconds"}
+
+
+def load_plan_file(path: Path) -> PlanFile:
+    """A comparison plan:
+
+        datasets: [invoice-agent, invoice-agent-safety]   # default for every model
+        repeats: 1                                         # default for every model
+        models:                                            # run in this order
+          - spec: anthropic:claude-haiku-4-5
+            repeats: 3
+          - spec: ollama:llama3.1:8b
+            datasets: [invoice-agent]
+            timeout_seconds: 600
+
+    Unknown keys, a repeated spec, or an empty model/dataset list are errors."""
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise BenchmarkError(f"can't read the plan file {path}: {exc}") from None
+    if not isinstance(raw, dict) or set(raw) - _PLAN_KEYS:
+        raise BenchmarkError(f"{path}: expected a mapping with 'datasets', 'repeats' and 'models' only")
+    models = raw.get("models")
+    if not isinstance(models, list) or not models:
+        raise BenchmarkError(f"{path}: 'models' must be a non-empty list")
+    specs: list[ModelSpec] = []
+    entries: dict[str, ModelPlan] = {}
+    for i, item in enumerate(models):
+        where = f"{path}: models[{i}]"
+        if not isinstance(item, dict) or "spec" not in item or set(item) - _MODEL_KEYS:
+            raise BenchmarkError(f"{where}: expected 'spec' and optionally 'datasets', 'repeats', 'timeout_seconds'")
+        spec = parse_model_spec(str(item["spec"]))
+        if spec.raw in entries:
+            raise BenchmarkError(f"{where}: '{spec.raw}' is listed twice")
+        datasets = item.get("datasets", raw.get("datasets"))
+        if not isinstance(datasets, list) or not datasets or not all(isinstance(d, str) and d for d in datasets):
+            raise BenchmarkError(f"{where}: 'datasets' must be a non-empty list of dataset names")
+        repeats = item.get("repeats", raw.get("repeats", 1))
+        if not isinstance(repeats, int) or isinstance(repeats, bool) or not 1 <= repeats <= 20:
+            raise BenchmarkError(f"{where}: 'repeats' must be an integer from 1 to 20")
+        timeout = item.get("timeout_seconds")
+        if timeout is not None and (
+            not isinstance(timeout, int | float) or isinstance(timeout, bool) or not 0 < timeout <= MAX_TIMEOUT_SECONDS
+        ):
+            raise BenchmarkError(f"{where}: 'timeout_seconds' must be a number in (0, {MAX_TIMEOUT_SECONDS:g}]")
+        specs.append(spec)
+        entries[spec.raw] = ModelPlan(tuple(datasets), repeats, float(timeout) if timeout is not None else None)
+    return PlanFile(specs, entries)
 
 
 # -- environment ---------------------------------------------------------------------
@@ -321,10 +398,28 @@ class Plan:
     datasets: list[dict[str, Any]]
     repeats: int
     estimates: list[Estimate]
+    # Per-model datasets / repeats / timeout (from a plan file). A model without an entry runs every
+    # dataset `repeats` times with the CLI's timeout.
+    entries: dict[str, ModelPlan] = field(default_factory=dict)
 
     @property
     def runnable(self) -> list[ModelSpec]:
         return [s for s in self.specs if s.raw not in self.skipped]
+
+    def datasets_for(self, spec: ModelSpec) -> list[dict[str, Any]]:
+        entry = self.entries.get(spec.raw)
+        if entry is None:
+            return list(self.datasets)
+        by_name = {d["name"]: d for d in self.datasets}
+        return [by_name[name] for name in entry.datasets]
+
+    def repeats_for(self, spec: ModelSpec) -> int:
+        entry = self.entries.get(spec.raw)
+        return entry.repeats if entry is not None else self.repeats
+
+    def timeout_for(self, spec: ModelSpec, default: float) -> float:
+        entry = self.entries.get(spec.raw)
+        return entry.timeout_seconds if entry is not None and entry.timeout_seconds is not None else default
 
     @property
     def total_estimate(self) -> float:
@@ -368,10 +463,11 @@ def execute(
     app = client.upsert_application(name=BENCHMARK_APP)
     for spec in plan.runnable:
         version = client.upsert_application_version(application_id=app["id"], version=spec.raw)
-        for dataset in plan.datasets:
+        repeats = plan.repeats_for(spec)
+        for dataset in plan.datasets_for(spec):
             records = outcome.runs.setdefault((spec.raw, dataset["name"]), [])
-            for repeat in range(1, plan.repeats + 1):
-                label = f"{spec.raw} on {dataset['name']} (repeat {repeat}/{plan.repeats})"
+            for repeat in range(1, repeats + 1):
+                label = f"{spec.raw} on {dataset['name']} (repeat {repeat}/{repeats})"
                 remaining = max_cost - outcome.spent_usd
                 if spec.is_llm and remaining <= 0:
                     outcome.stopped_reason = (
@@ -385,7 +481,7 @@ def execute(
                     "dataset_version_id": dataset["id"],
                     "adapter": {"type": "python", "target": spec.adapter_target},
                     "provider_type": spec.provider_type,
-                    "timeout_seconds": timeout_seconds if spec.is_llm else 10.0,
+                    "timeout_seconds": plan.timeout_for(spec, timeout_seconds) if spec.is_llm else 10.0,
                     "environment": "benchmark",
                     "git_commit_sha": git_commit_sha,
                     "adapter_settings": spec.settings(temperature, prompt),
@@ -429,6 +525,7 @@ def document(
     prompt_sha256: str | None,
     max_cost: float,
     git_commit_sha: str | None,
+    timeout_seconds: float = 120.0,
 ) -> dict[str, Any]:
     records = [r for runs in outcome.runs.values() for r in runs]
     results = []
@@ -467,6 +564,7 @@ def document(
         },
         "settings": {
             "repeats": plan.repeats,
+            "timeout_seconds": timeout_seconds,
             "temperature": temperature,
             "max_cost_usd": max_cost,
             "prompt": {"source": prompt_source, "sha256": prompt_sha256},
@@ -482,6 +580,9 @@ def document(
                 "model": specs[raw].model,
                 "reported_model": specs[raw].reported_model,
                 "skipped": plan.skipped.get(raw),
+                "datasets": [d["name"] for d in plan.datasets_for(specs[raw])],
+                "repeats": plan.repeats_for(specs[raw]),
+                "timeout_seconds": plan.timeout_for(specs[raw], timeout_seconds) if specs[raw].is_llm else None,
             }
             for raw in specs
         ],

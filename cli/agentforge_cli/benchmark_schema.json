@@ -63,9 +63,10 @@
     "settings": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repeats", "temperature", "max_cost_usd", "prompt"],
+      "required": ["repeats", "timeout_seconds", "temperature", "max_cost_usd", "prompt"],
       "properties": {
         "repeats": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
         "temperature": {"type": "number", "minimum": 0, "maximum": 2},
         "max_cost_usd": {"type": "number", "minimum": 0},
         "prompt": {
@@ -100,13 +101,16 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["spec", "provider", "model", "reported_model", "skipped"],
+        "required": ["spec", "provider", "model", "reported_model", "skipped", "datasets", "repeats", "timeout_seconds"],
         "properties": {
           "spec": {"type": "string"},
           "provider": {"enum": ["scripted", "openai", "anthropic", "ollama"]},
           "model": {"type": "string"},
           "reported_model": {"type": ["string", "null"]},
-          "skipped": {"type": ["string", "null"]}
+          "skipped": {"type": ["string", "null"]},
+          "datasets": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "repeats": {"type": "integer", "minimum": 1},
+          "timeout_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0}
         }
       }
     },

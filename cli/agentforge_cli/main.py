@@ -613,8 +613,13 @@ def compare(
     models: str | None = typer.Option(
         None,
         "--models",
-        help="Model comparison: comma-separated specs, e.g. scripted,anthropic:claude-haiku-4-5,openai:gpt-5.4-mini,"
-        "ollama:llama3.1:8b.",
+        help="Model comparison: comma-separated specs, e.g. scripted,anthropic:claude-haiku-4-5,ollama:llama3.1:8b.",
+    ),
+    plan_file: Path | None = typer.Option(
+        None,
+        "--plan",
+        help="Model comparison from a plan file: models in run order, each with its datasets, repeats and timeout "
+        "(the default comparison: benchmarks/compare.yaml). Replaces --models/--datasets/--repeats.",
     ),
     datasets: str = typer.Option(
         "invoice-agent,invoice-agent-safety", "--datasets", help="Comma-separated published dataset names."
@@ -626,23 +631,41 @@ def compare(
     ),
     prompt_file: Path | None = typer.Option(None, "--prompt-file", help="Base system prompt for the LLM planner."),
     temperature: float = typer.Option(0.0, "--temperature", min=0, max=2, help="Sampling temperature (LLM models)."),
-    timeout: float = typer.Option(120.0, "--timeout", help="Per-case timeout in seconds for LLM models."),
+    timeout: float = typer.Option(
+        120.0, "--timeout", min=1, max=600, help="Per-case timeout (s) for LLM models; a plan entry may set its own."
+    ),
     pricing_file: Path = typer.Option(Path("config/pricing.yaml"), "--pricing-file", help="Pricing table."),
     env_file: Path = typer.Option(Path(".env"), "--env-file", help="Where keys are looked up besides the env."),
     output: Path | None = typer.Option(None, "--output", help="Results JSON (default: benchmarks/<date>-....json)."),
     api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
 ) -> None:
-    """Regression report between two runs (--baseline/--candidate), or a model comparison (--models)."""
-    if models is not None:
+    """Regression report between two runs (--baseline/--candidate), or a model comparison (--models / --plan)."""
+    if models is not None or plan_file is not None:
         if baseline or candidate:
-            raise typer.BadParameter("use either --models or --baseline/--candidate, not both")
+            raise typer.BadParameter("use either --models/--plan or --baseline/--candidate, not both")
+        if models is not None and plan_file is not None:
+            raise typer.BadParameter("use either --models or --plan, not both")
+        if plan_file is not None:
+            try:
+                plan_spec = benchmark.load_plan_file(plan_file)
+            except benchmark.BenchmarkError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+        else:
+            try:
+                specs = list(dict.fromkeys(benchmark.parse_model_spec(m) for m in benchmark.split_list(models or "")))
+            except benchmark.BenchmarkError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            names = tuple(benchmark.split_list(datasets))
+            if not specs or not names:
+                raise typer.BadParameter("--models and --datasets need at least one entry each")
+            plan_spec = benchmark.PlanFile(specs, {s.raw: benchmark.ModelPlan(names, repeats) for s in specs})
         _compare_models(
-            models, datasets, repeats, max_cost, yes, prompt_file, temperature, timeout, pricing_file, env_file,
-            output, api_url,
+            plan_spec, repeats, max_cost, yes, prompt_file, temperature, timeout, pricing_file, env_file, output,
+            api_url,
         )  # fmt: skip
         return
     if not (baseline and candidate):
-        raise typer.BadParameter("pass --baseline and --candidate (two run ids), or --models")
+        raise typer.BadParameter("pass --baseline and --candidate (two run ids), --models, or --plan")
     with AgentForgeClient(base_url=api_url) as client:
         try:
             report = client.regression(baseline, candidate)
@@ -708,8 +731,7 @@ _COLUMNS = (
 
 
 def _compare_models(
-    models: str,
-    datasets: str,
+    plan_spec: benchmark.PlanFile,
     repeats: int,
     max_cost: float,
     yes: bool,
@@ -721,13 +743,8 @@ def _compare_models(
     output: Path | None,
     api_url: str,
 ) -> None:
-    try:
-        specs = list(dict.fromkeys(benchmark.parse_model_spec(m) for m in benchmark.split_list(models)))
-    except benchmark.BenchmarkError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    dataset_names = benchmark.split_list(datasets)
-    if not specs or not dataset_names:
-        raise typer.BadParameter("--models and --datasets need at least one entry each")
+    specs = plan_spec.specs
+    dataset_names = plan_spec.dataset_names
     try:
         pricing = parse_pricing(yaml.safe_load(pricing_file.read_text(encoding="utf-8")))
     except (OSError, PricingConfigError, yaml.YAMLError) as exc:
@@ -763,11 +780,15 @@ def _compare_models(
             }
             for name, v in zip(dataset_names, versions, strict=True)
         ]
-        cases = sum(d["cases"] for d in dataset_rows)
         base_tokens = benchmark.base_input_tokens(prompt_chars, schema_chars)
         runnable = [s for s in specs if s.raw not in skipped]
-        estimates = [benchmark.estimate(s, cases, repeats, base_tokens, pricing) for s in runnable]
-        plan = benchmark.Plan(specs, skipped, dataset_rows, repeats, estimates)
+        plan = benchmark.Plan(specs, skipped, dataset_rows, repeats, [], plan_spec.entries)
+        plan.estimates = [
+            benchmark.estimate(
+                s, sum(d["cases"] for d in plan.datasets_for(s)), plan.repeats_for(s), base_tokens, pricing
+            )
+            for s in runnable
+        ]
         if not runnable:
             console.print("[red]No model can run here; nothing was started.[/red]")
             raise typer.Exit(code=1)
@@ -775,7 +796,7 @@ def _compare_models(
         table = Table(title="Estimated cost before running (rough, deliberately high)")
         for col in ("model", "cases x repeats", "tokens/case in+out", "est. USD"):
             table.add_column(col)
-        for e in estimates:
+        for e in plan.estimates:
             table.add_row(
                 escape(e.spec),
                 f"{e.cases} x {e.runs}",
@@ -819,6 +840,7 @@ def _compare_models(
         prompt_sha256=_prompt_hash(prompt),
         max_cost=max_cost,
         git_commit_sha=current_commit_sha(),
+        timeout_seconds=timeout,
     )
     benchmark.validate_document(doc)
 
