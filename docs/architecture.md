@@ -1,4 +1,4 @@
-# Architecture — through Phase 7 and Benchmarks part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmark harness)
+# Architecture — through Phase 7 and the benchmarks (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmarks)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -296,7 +296,7 @@ shape. A replay without overrides calls the adapter with exactly the
 arguments the run used, which is what makes the determinism check
 (`diff.identical`) meaningful.
 
-## Adapter settings, the cost cap, and the LLM planner (Benchmarks part A)
+## Adapter settings, the cost cap, and the LLM planner (benchmarks)
 
 A run can carry **adapter settings** (`evaluation_runs.adapter_settings`,
 migration `f8b2d6c43a19`): the same contract as replay overrides, applied to
@@ -313,9 +313,9 @@ case's spend can't be measured (an error, no tokens, no price). It's checked
 between cases, never mid-case.
 
 ```
-agentforge compare --models ...  (CLI)
+agentforge compare --models ... | --plan benchmarks/compare.yaml  (CLI)
   -> skip models without a key / Ollama / price; estimate; refuse over --max-cost unless --yes
-  -> per model x dataset x repeat: POST /runs {adapter: answer_llm, adapter_settings: {provider, model,
+  -> per model (plan order) x its datasets x its repeats: POST /runs {adapter: answer_llm, adapter_settings: {provider, model,
      temperature, prompt?}, max_cost_usd: budget left}; poll; add the run's spend
   -> table + benchmarks/<date>-compare-<hash>.json (validated against benchmark_schema.json)
 
@@ -487,5 +487,5 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-An actual model comparison (the harness exists; no model has been run),
-LLM-as-judge evaluators, authentication. See the root README.
+LLM-as-judge evaluators, authentication. The model comparison has been run
+once (README "Benchmarks: real LLM agents"). See the root README.

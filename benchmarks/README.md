@@ -9,9 +9,19 @@ worker's code version, the pricing file's hash, the pre-run cost estimate
 and its assumptions, the actual (estimated) spend, and per model and dataset
 every run's id, status and metrics, with mean / min / max over the repeats.
 
-**No results are committed yet.** No paid model has been run (Benchmarks part
-A built the harness only), and Ollama wasn't installed on the machine where
-part A was built, so there is no local-model result either. A file appears
-here only from a real run; nothing in this directory is written by hand.
+[`compare.yaml`](compare.yaml) is the default comparison (`agentforge compare
+--plan benchmarks/compare.yaml`): the models in run order, each with its
+datasets, repeats and per-case timeout.
+
+Results:
+
+- [`2026-10-08-compare-a365a887.json`](2026-10-08-compare-a365a887.json) -- run
+  on 2026-10-07 (US Central; 00:58 UTC on the 8th): scripted v1 (reference),
+  Llama 3.1 8B via Ollama (trajectory dataset, 1 run), Claude Haiku 4.5 and
+  Claude Sonnet 5.5 (both datasets, 3 repeats). 17 runs, all completed;
+  estimated spend $2.02.
+
+A file appears here only from a real run; nothing in this directory is written
+by hand.
 
 See the root README, "Benchmarks: real LLM agents".

@@ -23,8 +23,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   `http_server`); `examples/invoice_agent` (LangGraph StateGraph + ToolNode; **scripted planner** in
   `answer_v1`/`answer_v2` (5 deliberate regressions) -- what CI uses -- and an **LLM planner** in `answer_llm`
   (`llm.py` providers, `llm_planner.py`, `prompts/system.md`)) + `datasets/invoice_agent_v1.yaml`
-- Benchmarks: `agentforge compare --models` (`cli/agentforge_cli/benchmark.py`, schema
-  `benchmark_schema.json`), results JSON in `benchmarks/`; keys only in the git-ignored `.env`
+- Benchmarks: `agentforge compare --plan benchmarks/compare.yaml` (default: scripted v1, ollama llama3.1:8b,
+  claude-haiku-4-5, claude-sonnet-5-5) or `--models`; `cli/agentforge_cli/benchmark.py`, schema
+  `benchmark_schema.json`, results JSON in `benchmarks/`; keys only in the git-ignored `.env`
 - Python 3.12, Node 18+
 
 ## Rules (non-negotiable)
@@ -60,7 +61,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-07, Phase 7 on main; Benchmarks part A on branch `benchmarks`)
+## Current status (2026-10-07, Phase 7 + benchmarks on main; Phase 8 next)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -167,6 +168,18 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   **No paid model run; Ollama not installed here, so no LLM result exists.** Provider fixtures in
   tests/fixtures/llm are hand-written in API shape, not recordings. Tests: SQLite 349 + 21 skipped; Postgres 370;
   Playwright 14 (UI unchanged).
+- **Benchmarks part B done, merged to main** (2026-10-07): `compare --plan` (per-model datasets/repeats/timeout;
+  `benchmarks/compare.yaml`; API per-case timeout limit 300 -> 600 s). Smoke test found nothing to fix in our code;
+  temperature split verified against the real API (Sonnet 5.5: 400 "deprecated", Haiku 4.5 accepts). Results
+  `benchmarks/2026-10-08-compare-a365a887.json` (code df27401): pass rate trajectory / safety -- scripted 1.00/1.00,
+  Llama 3.1 8B 0.20/(not run), Haiku 0.50/0.77, Sonnet 0.50/0.86, identical across 3 repeats. Spend $2.02 + $0.03
+  smoke of a $5 cap; built-in estimate said $19 (assumes thinking output; run with --yes on a measured $3.35).
+  Known, deliberately NOT changed after the run (would be tuning): 5/10 trajectory answer checks expect the scripted
+  agent's phrasing; `graceful_tool_failure` flags a claim inside a negation ("not voided"); the profile's
+  `request_human_approval.action` enum isn't in the tool signature (`tool_args_valid` fails every model on
+  `amount-in-words`); Ollama's stock llama3.1 template drops the tool list after turn 1 (prompt shrinks ~946 -> ~570).
+  Llama ran 58% CPU / 42% GPU (GTX 1650 Ti 4 GB). Fixing any of these = a new dataset version / profile + re-run.
+  Tests: SQLite 361 + 21 skipped; Postgres 382; Playwright 14 (not re-run locally; only the form's timeout max changed).
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
 - The committed screenshots had drifted since Phases 4-6 (old nav, missing evaluators); all 15 were re-captured in part B.
   When Playwright rewrites them, compare with the committed ones before deciding they changed (IDs/timestamps always do).
@@ -193,10 +206,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: PII redaction, Trace Explorer page, overhead profile)
 7. Failure replay — **done** (A: override contract, replay engine, diff, API, CLI; B: recorded replay options +
    API 400, provenance warnings, Trace Explorer Replay button, override form, side-by-side diff, replay list)
-Benchmarks part A (harness) **done** on branch `benchmarks`; part B: actually run models (keys + a spend decision,
-or Ollama installed) and commit results JSON. Then: remaining dashboard pages.
+Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README).
+**Next: Phase 8.**
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
-   screenshots, tests), K8s manifests, MCP adapter, a real model-comparison run (OpenAI / Claude /
-   optional Llama via vLLM; needs API keys, results in `benchmarks/` JSON with date + dataset hash),
-   and resume bullets generated only from measured results in the repo.
+   screenshots, tests), K8s manifests, MCP adapter, remaining dashboard pages (the Claude + Llama
+   comparison is done; OpenAI models optional), and resume bullets generated only from measured results.
