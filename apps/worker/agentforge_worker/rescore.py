@@ -30,6 +30,7 @@ from agentforge_evaluators import (
     CaseRecord,
     EvalConfig,
     EvalInput,
+    EvaluatorSpec,
     MetricRecord,
     ModelPrice,
     TrajectoryStep,
@@ -39,6 +40,23 @@ from agentforge_worker import provenance
 from agentforge_worker.runner import PinnedEvaluators, case_evaluators, evaluate_one
 
 log = logging.getLogger("agentforge.worker")
+
+
+class RescorePins(PinnedEvaluators):
+    """The re-score's pinned versions. A case config that names an exact version (`name@1.0.0`) of an
+    evaluator the re-score replaced gets the re-score's version: replacing is by name, so it must not be
+    silently skipped as an unpinned key."""
+
+    def __init__(self, keys: list[str], replaced: Mapping[str, str]) -> None:
+        super().__init__(keys)
+        self._replaced = set(replaced)
+
+    def lookup(self, key: str) -> EvaluatorSpec | None:
+        spec = super().lookup(key)
+        name = key.partition("@")[0]
+        if spec is None and "@" in key and name in self._replaced:
+            return super().lookup(name)
+        return spec
 
 
 def stored_input(result: EvaluationResult) -> EvalInput:
@@ -98,6 +116,7 @@ async def execute_rescore(
             rescore.code_sha256 = prov.get("code_sha256")
             await session.commit()
             evaluators = list(rescore.evaluators)
+            replaced = dict(rescore.replaced)
             version = await session.get(DatasetVersion, run.dataset_version_id)
             assert version is not None
             default = version.default_evaluators
@@ -111,7 +130,7 @@ async def execute_rescore(
                 )
             )
         results.sort(key=lambda r: r.test_case.case_key)
-        pinned = PinnedEvaluators(evaluators)
+        pinned = RescorePins(evaluators, replaced)
         records: list[CaseRecord] = []
         for result in results:
             scored = []

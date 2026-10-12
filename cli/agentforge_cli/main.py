@@ -1,5 +1,5 @@
 """AgentForge CLI: dataset publish/validate, adversarial generate, evaluate,
-runs list/show, baseline set/show, compare (two runs, or several models), gate, replay.
+runs list/show, baseline set/show, compare (two runs, or several models), gate, replay, rescore.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -48,6 +48,7 @@ from agentforge_cli.release_io import (
     verdict_line,
 )
 from agentforge_cli.replay_io import OverrideArgsError, build_overrides, print_replay
+from agentforge_cli.rescore_io import print_rescore, split_evaluators
 from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
 from agentforge_evaluators import PricingConfigError, parse_pricing
 from agentforge_sdk import AgentForgeClient
@@ -463,6 +464,58 @@ def replay(
                 console.print(f"[red]Lost contact with the API while waiting:[/red] {escape(str(exc))}")
                 raise typer.Exit(code=1) from None
     print_replay(console, current)
+    if current["status"] == "failed":
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def rescore(
+    run_id: str = typer.Argument(..., help="A completed run id."),
+    evaluators: list[str] = typer.Option(
+        ...,
+        "--evaluators",
+        "-e",
+        help="Evaluator versions to score with, name@version or a bare name (its latest version); repeatable "
+        "or comma-separated. Each replaces the run's pinned version of that evaluator.",
+    ),
+    show_all: bool = typer.Option(False, "--all", help="List every case, not only the ones that changed."),
+    poll_interval: float = typer.Option(0.5, "--poll-interval", help="Seconds between status checks."),
+    wait_timeout: float = typer.Option(300.0, "--wait-timeout", help="Stop waiting after this many seconds."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url", help="AgentForge API base URL."),
+) -> None:
+    """Score a completed run's stored outputs again with other evaluator versions and print the
+    verdicts before and after. No adapter (and no model) is called; the original run is not changed.
+    Executed by the worker, like runs.
+
+    Exit code: 0 completed, 1 failed or setup error, 2 still unfinished when --wait-timeout elapsed.
+    """
+    requested = split_evaluators(evaluators)
+    if not requested:
+        raise typer.BadParameter("--evaluators needs at least one evaluator", param_hint="--evaluators")
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            current = client.create_rescore(run_id, requested)
+        except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
+            console.print(f"[red]Re-score not created:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+        console.print(f"Submitted re-score [bold]{current['id']}[/bold] of run {run_id}")
+        deadline = time.monotonic() + wait_timeout
+        while current["status"] not in FINISHED:
+            if time.monotonic() > deadline:
+                console.print(f"[yellow]Still {current['status']} after {wait_timeout:g}s; stopped waiting.[/yellow]")
+                raise typer.Exit(code=2)
+            time.sleep(poll_interval)
+            try:
+                current = client.get_rescore(current["id"])
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]Lost contact with the API while waiting:[/red] {escape(str(exc))}")
+                raise typer.Exit(code=1) from None
+        try:
+            run = client.get_run(run_id)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not fetch the original run:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    print_rescore(console, current, run, show_all=show_all)
     if current["status"] == "failed":
         raise typer.Exit(code=1)
 
