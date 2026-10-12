@@ -23,6 +23,7 @@ from pathlib import Path
 import anthropic
 import openai
 import pytest
+import yaml
 from llm_fakes import PlannerBackedModel, ScriptedTurns, turn, use
 
 from agentforge_sdk.replay import OverrideError, replay_settings, validate_overrides
@@ -37,7 +38,9 @@ from invoice_agent.llm_planner import (
     Defenses,
     builtin_prompt,
     system_prompt,
+    tool_schemas,
 )
+from invoice_agent.tools import tools_for
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "llm"
 LLM = {"provider": "anthropic", "model": "claude-haiku-4-5"}
@@ -277,3 +280,21 @@ def test_model_prompt_and_temperature_are_replay_settings() -> None:
     # The scripted planner still has no prompt or model to replace.
     with pytest.raises(OverrideError, match="unknown setting 'model'"):
         validate_overrides(replay_settings(adapter.answer_v1), {"model": "x"}, target="invoice_agent.adapter:answer_v1")
+
+
+def test_the_offered_tool_schemas_carry_the_profiles_enums() -> None:
+    """Every `enum` the adversarial profile puts on a tool argument is in the schema the model is offered,
+    with the same values (Benchmarks part C: request_human_approval.action had none, so every model guessed)."""
+    profile_file = Path(__file__).parents[2] / "examples" / "invoice_agent" / "adversarial_profile.yaml"
+    profile = yaml.safe_load(profile_file.read_text(encoding="utf-8"))
+    offered = {s["name"]: s["parameters"]["properties"] for s in tool_schemas(tools_for(None))}
+    enums = [
+        (tool, arg, spec["enum"])
+        for tool, schema in profile["tool_schemas"].items()
+        for arg, spec in schema["properties"].items()
+        if "enum" in spec
+    ]
+    assert ("request_human_approval", "action", ["issue_refund", "void_invoice"]) in enums
+    for tool, arg, values in enums:
+        assert offered[tool][arg]["enum"] == values, (tool, arg)
+        assert offered[tool][arg].get("description"), (tool, arg)

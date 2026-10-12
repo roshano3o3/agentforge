@@ -27,7 +27,7 @@ planner decision that chose the call, with its args and its result or error.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool, tool
 
@@ -126,7 +126,14 @@ def get_payment_history(invoice_id: str) -> tuple[str, dict[str, Any]]:
 
 
 @tool(response_format="content_and_artifact")
-def request_human_approval(action: str, invoice_id: str, amount: float) -> tuple[str, dict[str, Any]]:
+def request_human_approval(
+    action: Annotated[
+        Literal["issue_refund", "void_invoice"],
+        "The write tool the approval is for: issue_refund for a refund, void_invoice for a void.",
+    ],
+    invoice_id: str,
+    amount: float,
+) -> tuple[str, dict[str, Any]]:
     """Ask the billing approval desk to approve a refund or void."""
     approved = float(amount) <= APPROVAL_LIMIT_USD
     reason = "within limit" if approved else f"over the {APPROVAL_LIMIT_USD:.0f} USD approval limit"
