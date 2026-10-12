@@ -164,6 +164,28 @@ def test_measured_costs_and_the_measured_estimate(tmp_path: Path) -> None:
     assert gpt.basis == "assumed" and gpt.usd > 0
 
 
+def test_a_document_priced_with_an_older_pricing_file_counts_only_where_the_price_is_unchanged(tmp_path: Path) -> None:
+    haiku, sonnet = "anthropic:claude-haiku-4-5", "anthropic:claude-sonnet-5-5"
+    doc = _results_doc("old", [(haiku, "traj", [0.002]), (sonnet, "traj", [0.01])], {"traj": 10})
+    (tmp_path / "a.json").write_text(json.dumps(doc), encoding="utf-8")
+    history = {
+        "old": {"claude-haiku-4-5": ModelPrice(1.0, 5.0), "claude-sonnet-5-5": ModelPrice(2.0, 10.0)},
+        "new": {"claude-haiku-4-5": ModelPrice(1.0, 5.0), "claude-sonnet-5-5": ModelPrice(3.0, 15.0)},
+    }
+    measured = benchmark.measured_costs(tmp_path, "new", history)
+    assert (haiku, "traj") in measured  # same Haiku price in both versions
+    assert (sonnet, "traj") not in measured  # Sonnet's price changed: its old cost per case is stale
+    assert benchmark.measured_costs(tmp_path, "new") == {}  # without the history, only an exact hash counts
+
+
+def test_pricing_history_reads_the_committed_versions() -> None:
+    path = Path(__file__).parents[2] / "config" / "pricing.yaml"
+    history = benchmark.pricing_history(path)
+    assert benchmark.pricing_file_sha256(path) in history
+    # (A shallow CI checkout has only HEAD's version, so no count is asserted.)
+    assert "claude-haiku-4-5" in history[benchmark.pricing_file_sha256(path)]
+
+
 def test_pricing_file_hash_matches_the_workers(tmp_path: Path) -> None:
     f = tmp_path / "pricing.yaml"
     f.write_bytes(b"models:\r\n  x: 1\r\n")

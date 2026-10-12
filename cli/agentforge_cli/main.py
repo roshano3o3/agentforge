@@ -837,7 +837,9 @@ def _compare_models(
         runnable = [s for s in specs if s.raw not in skipped]
         plan = benchmark.Plan(specs, skipped, dataset_rows, repeats, [], plan_spec.entries)
         measured = benchmark.measured_costs(
-            (output.parent if output is not None else Path("benchmarks")), benchmark.pricing_file_sha256(pricing_file)
+            output.parent if output is not None else Path("benchmarks"),
+            benchmark.pricing_file_sha256(pricing_file),
+            benchmark.pricing_history(pricing_file),
         )
         plan.estimates = [
             benchmark.estimate(

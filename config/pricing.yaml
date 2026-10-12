@@ -56,6 +56,10 @@ models:
   ollama/llama3.1:8b:
     input_usd_per_million_tokens: 0
     output_usd_per_million_tokens: 0
+  # llama3.1:8b with a template that keeps the tool list every turn (examples/invoice_agent/ollama/).
+  ollama/llama3.1-tools:8b:
+    input_usd_per_million_tokens: 0
+    output_usd_per_million_tokens: 0
   ollama/qwen2.5:7b:
     input_usd_per_million_tokens: 0
     output_usd_per_million_tokens: 0

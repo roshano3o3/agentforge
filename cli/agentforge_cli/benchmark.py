@@ -47,6 +47,7 @@ import hashlib
 import json
 import os
 import statistics
+import subprocess
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -58,7 +59,7 @@ from typing import Any, Protocol
 import httpx
 import yaml
 
-from agentforge_evaluators import ModelPrice, cost_usd, percentile
+from agentforge_evaluators import ModelPrice, PricingConfigError, cost_usd, parse_pricing, percentile
 
 SCHEMA_ID = "agentforge.benchmark/v1"
 PROVIDERS = ("openai", "anthropic", "ollama")
@@ -292,11 +293,54 @@ def pricing_file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
-def measured_costs(directory: Path, pricing_sha256: str) -> dict[tuple[str, str], MeasuredCost]:
+def pricing_history(path: Path) -> dict[str, dict[str, ModelPrice]]:
+    """Worker-style sha256 -> parsed prices, for every committed version of the pricing file (git) and the
+    working copy, so a results document priced with an earlier version can still be checked model by
+    model. Best effort: without git (or outside a repository) only the working copy is known."""
+    texts: list[bytes] = []
+    try:
+        texts.append(path.read_bytes())
+        repo = path.resolve().parent
+        rel = subprocess.run(
+            ["git", "ls-files", "--full-name", path.name], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        commits = subprocess.run(
+            ["git", "log", "--format=%H", "--", path.name], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.split()
+        for commit in commits:
+            shown = subprocess.run(["git", "show", f"{commit}:{rel}"], cwd=repo, capture_output=True, check=False)
+            if shown.returncode == 0:
+                texts.append(shown.stdout)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    out: dict[str, dict[str, ModelPrice]] = {}
+    for raw in texts:
+        try:
+            out[hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()] = parse_pricing(yaml.safe_load(raw))
+        except (yaml.YAMLError, PricingConfigError):
+            continue
+    return out
+
+
+def measured_costs(
+    directory: Path,
+    pricing_sha256: str,
+    history: Mapping[str, Mapping[str, ModelPrice]] | None = None,
+) -> dict[tuple[str, str], MeasuredCost]:
     """(model spec, dataset name or ALL_DATASETS) -> measured cost per case, from the results JSON files in
-    `directory`. Only documents priced with this pricing file count (another price table would make the
-    per-case cost wrong); runs without a measured cost (no tokens reported) don't count. The all-datasets
-    figure weights each run by its dataset's case count."""
+    `directory`. A document counts for a model when it was priced with the current pricing file, or --
+    given `history` (pricing_history) -- with a version in which that model's price is the same as now
+    (another price would make the per-case cost wrong). Runs without a measured cost (no tokens reported)
+    don't count. The all-datasets figure weights each run by its dataset's case count."""
+    current = (history or {}).get(pricing_sha256, {})
+
+    def priced_as_now(doc_hashes: list[str], model: str) -> bool:
+        if pricing_sha256 in doc_hashes:
+            return True
+        reported = parse_model_spec(model).reported_model or ""
+        price = current.get(reported)
+        return price is not None and any((history or {}).get(h, {}).get(reported) == price for h in doc_hashes)
+
     per_dataset: dict[tuple[str, str], list[tuple[float, float | None]]] = {}
     totals: dict[str, list[float]] = {}  # model -> [usd, tokens, cases, runs, cases with tokens]
     for path in sorted(directory.glob("*.json")):
@@ -306,11 +350,15 @@ def measured_costs(directory: Path, pricing_sha256: str) -> dict[tuple[str, str]
             continue
         if not isinstance(doc, dict) or doc.get("schema") != SCHEMA_ID:
             continue
-        if pricing_sha256 not in (doc.get("agentforge") or {}).get("pricing_sha256", []):
-            continue
+        doc_hashes = list((doc.get("agentforge") or {}).get("pricing_sha256", []))
         cases = {d["name"]: d["cases"] for d in doc.get("datasets", [])}
         for row in doc.get("results", []):
             model, dataset = row["model"], row["dataset"]
+            try:
+                if not priced_as_now(doc_hashes, model):
+                    continue
+            except BenchmarkError:
+                continue
             for run in row.get("runs", []):
                 metrics = run.get("metrics") or {}
                 usd, tokens = metrics.get("cost_per_case_usd"), metrics.get("tokens_per_case")
