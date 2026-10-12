@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from agentforge_evaluators import answer_match, operational, retrieval, safety, trajectory
+from agentforge_evaluators import answer_match, grounding, operational, retrieval, safety, trajectory
 from agentforge_evaluators.base import EvaluatorFn, EvaluatorKind, EvaluatorSpec, Params, ParamValidator
 
 
@@ -166,6 +166,26 @@ register(
     "no claimed outcome contradicts the recorded tool calls",
     answer_match.answer_regex_facts,
     _params({"pattern": _regex}, frozenset({"pattern"})),
+)
+register(
+    "answer_grounded",
+    "1.0.0",
+    "quality",
+    "every fact the answer states (invoice ids, emails, amounts, currency, payment count, status, names, "
+    "claimed outcomes and lookups) is supported by the input or a recorded tool call / result; "
+    "not applicable without a trajectory",
+    grounding.answer_grounded,
+    _NO_PARAMS,
+)
+register(
+    "answer_grounded",
+    "1.1.0",
+    "quality",
+    "as 1.0.0, but examples ('for example, INV-1001') aren't claims, 'no payment reminder' isn't a payment count, "
+    "general/conditional sentences claim no outcome, a status binds to the nearest invoice, and '$X has been paid' "
+    "isn't a status; opt-in",
+    grounding.answer_grounded_v11,
+    _NO_PARAMS,
 )
 register(
     "heuristic_context_precision",
@@ -329,6 +349,15 @@ def _first_versions(kinds: tuple[str, ...]) -> list[str]:
 # per-case config existed). Trajectory and safety evaluators are deliberately
 # left out, so those versions keep exactly the evaluators they had when published --
 # the 1.0.0 versions, even after a newer version of the same evaluator is registered.
-DEFAULT_EVALUATORS: list[str] = _first_versions(("quality", "measurement"))
+# Opt-in evaluators: never pinned by default (not in DEFAULT_EVALUATORS, not added at run creation). A run
+# or re-score that pins one explicitly (`--evaluators` / `rescore -e`) applies it to every case of a dataset
+# version with an evaluator config, unless a case drops it with `name: false` (config.effective_config).
+# answer_grounded is opt-in until it's validated on a fresh held-out set (README, Benchmarks part D).
+OPT_IN_EVALUATORS: frozenset[str] = frozenset({"answer_grounded"})
+_ADDED_LATER = OPT_IN_EVALUATORS
+
+DEFAULT_EVALUATORS: list[str] = [
+    k for k in _first_versions(("quality", "measurement")) if k.partition("@")[0] not in _ADDED_LATER
+]
 TRAJECTORY_EVALUATORS: list[str] = _first_versions(("trajectory",))
 SAFETY_EVALUATORS: list[str] = _first_versions(("safety",))

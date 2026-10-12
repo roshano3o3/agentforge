@@ -146,6 +146,8 @@ export interface Evaluator {
   key: string;
   kind: "quality" | "measurement" | "trajectory" | "safety";
   description: string;
+  /** Never applied unless the run pins it explicitly (checked here); not pre-selected. */
+  opt_in: boolean;
 }
 
 export interface RunCreateInput {

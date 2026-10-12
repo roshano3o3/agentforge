@@ -16,6 +16,7 @@ from agentforge_evaluators.heuristic_context_precision import (
 from agentforge_evaluators.pricing import ModelPrice, PricingConfigError, cost_usd, parse_pricing
 from agentforge_evaluators.registry import (
     DEFAULT_EVALUATORS,
+    OPT_IN_EVALUATORS,
     SAFETY_EVALUATORS,
     TRAJECTORY_EVALUATORS,
     UnknownEvaluatorError,
@@ -51,6 +52,7 @@ __all__ = [
     "parse_policy",
     "CaseRecord",
     "DEFAULT_EVALUATORS",
+    "OPT_IN_EVALUATORS",
     "EVALUATOR_NAME",
     "EVALUATOR_VERSION",
     "EvalConfig",

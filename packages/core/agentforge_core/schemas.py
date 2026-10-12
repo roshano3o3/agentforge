@@ -374,6 +374,8 @@ class EvaluatorOut(BaseModel):
     key: str
     kind: str
     description: str
+    # Never applied unless a run or re-score pins it explicitly (agentforge_evaluators.OPT_IN_EVALUATORS).
+    opt_in: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -89,3 +89,24 @@ def test_every_mutant_breaks_one_fact_of_a_holdout_answer() -> None:
         assert item["steps"] == original["steps"] and item.get("params") == original.get("params")
         if item["check"] == "graceful_tool_failure":
             assert item["mutation"]["type"] in ("success_after_failure", "dropped_negation")
+
+
+MUTANTS_HOLDOUT = CALIBRATION_DIR / "answer_checks_mutants_holdout_v1.yaml"
+FROZEN_MUTANTS_HOLDOUT_SHA256 = "a76edad5873af7db7f0f72c0c07b6a8c5e7876eb294d6e60044e7aff84cebd46"
+
+
+def test_holdout_mutants_are_frozen_new_and_regenerate_byte_for_byte() -> None:
+    items = load_items(MUTANTS_HOLDOUT)
+    canon = json.dumps(
+        [[i["id"], i["check"], i["source"]["result_id"], i["label"], i["answer"]] for i in items],
+        separators=(",", ":"),
+    )
+    assert hashlib.sha256(canon.encode()).hexdigest() == FROZEN_MUTANTS_HOLDOUT_SHA256
+    assert mutants.render_holdout() == MUTANTS_HOLDOUT.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert len(items) == 27 and all(i["label"] == "incorrect" for i in items)
+    dev_mutants = {(i["check"], i["answer"]) for i in load_items(MUTANTS)}
+    assert not dev_mutants & {(i["check"], i["answer"]) for i in items}
+    originals = {i["id"]: i for i in load_items(CALIBRATION) + load_items(HOLDOUT)}
+    for item in items:
+        original = originals[item["mutation"]["from"]]
+        assert original["label"] == "correct" and item["steps"] == original["steps"]
