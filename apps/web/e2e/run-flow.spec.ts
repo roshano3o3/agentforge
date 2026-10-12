@@ -39,8 +39,9 @@ test("start a run from the UI and see the worker's completed per-case results", 
   await select("Dataset").selectOption({ label: "rag-support" });
   await expect(select("Published version")).toContainText("5 cases");
   await expect(form.getByRole("textbox", { name: "Adapter target" })).toHaveValue("rag_app.adapter:answer");
-  // Every registered evaluator is pre-selected: 9 answer/retrieval/measurement + 7 trajectory + 5 safety.
-  await expect(form.getByRole("checkbox")).toHaveCount(21);
+  // Every registered evaluator version is pre-selected: 9 answer/retrieval/measurement + 7 trajectory + 5 safety
+  // at 1.0.0, plus answer_contains, answer_regex and graceful_tool_failure at 1.1.0.
+  await expect(form.getByRole("checkbox")).toHaveCount(24);
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "run-new-form.png"), fullPage: true });
 
   await form.getByRole("button", { name: "Start run" }).click();
@@ -54,19 +55,20 @@ test("start a run from the UI and see the worker's completed per-case results", 
   await expect(page.locator("h1 .badge-label", { hasText: "fixture-based" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Per-metric means" })).toBeVisible();
 
-  // Per-case rows: each case shows only its configured evaluators, with verdicts and reasons.
+  // Per-case rows: each case shows only its configured evaluators, with verdicts and reasons (answer checks @1.1.0,
+  // the latest, which a new run pins; same verdicts as 1.0.0 on this sample, different wording).
   const rows = page.locator("tr[data-case-key]");
   await expect(rows).toHaveCount(5);
   const shipping = page.locator('tr[data-case-key="shipping-time-001"]');
   const shippingContains = shipping.locator(".metric-chip", { hasText: "answer_contains" });
   await expect(shippingContains).toContainText("pass");
-  await expect(shippingContains.locator(".metric-reason")).toContainText("contains all 2 expected phrase");
+  await expect(shippingContains.locator(".metric-reason")).toContainText("states the facts of all 2 expected phrase");
   // A genuine failure: the refund answer never states the tags requirement.
   const refundContains = page
     .locator('tr[data-case-key="refund-policy-001"]')
     .locator(".metric-chip", { hasText: "answer_contains" });
   await expect(refundContains).toContainText("fail");
-  await expect(refundContains.locator(".metric-reason")).toContainText("missing 1 of 1");
+  await expect(refundContains.locator(".metric-reason")).toContainText("'original tags': phrase not found");
   // The out-of-scope case drops the precision/recall defaults and uses a refusal check instead.
   const outOfScope = page.locator('tr[data-case-key="out-of-scope-sponsorship-001"]');
   await expect(outOfScope.locator(".metric-chip", { hasText: "heuristic_context_precision" })).toHaveCount(0);

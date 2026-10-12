@@ -173,10 +173,13 @@ usd = input_tokens / 1e6 * input_rate + output_tokens / 1e6 * output_rate
 Rates come from `config/pricing.yaml`, keyed by the model name the adapter
 reports. No rate is ever invented: with no reported tokens, no reported
 model, or a model missing from the pricing file, the value is null and the
-reason says which. The repo ships **no vendor prices** (they'd silently go
-stale) — only `local-deterministic` at $0, which is accurate for the
-model-less example app. Add your models' current rates yourself; the worker
-reads the file at startup.
+reason says which. Besides `local-deterministic` at $0 (accurate for the
+model-less example app), the file lists a few Anthropic and OpenAI models at
+standard rates **copied on 2026-10-07**, each block naming its source page,
+and three Ollama models at $0 (local hardware isn't priced). Vendor prices go
+stale: re-check them, and update the date with the numbers. The worker reads
+the file at startup; the same formula drives the worker's per-run cost cap
+and `agentforge compare --models` (`agentforge_evaluators.cost_usd`).
 
 ## Agent trajectories
 

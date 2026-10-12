@@ -52,11 +52,19 @@ jobs:
       - name: Check out the PR (candidate)
         uses: actions/checkout@v4
 
+      # The base branch's current tip, not pull_request.base.sha: that's the
+      # base commit recorded when the PR was opened and goes stale as the base
+      # branch moves, while the candidate checkout above is the PR merged with
+      # the base branch's tip. Gate against what the PR would merge into.
       - name: Check out the base branch (baseline + policy)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.ref }}
           path: .gate/base
+
+      - name: Record the base commit
+        id: base
+        run: echo "sha=$(git -C .gate/base rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         with:
@@ -73,7 +81,7 @@ jobs:
         id: gate
         env:
           BASE_DIR: .gate/base
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash scripts/ci-gate.sh
@@ -84,7 +92,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@v7
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |

@@ -7,11 +7,11 @@
 #      that directory, everything else identical);
 #   2. migrates the DB, starts the API, publishes the datasets;
 #   3. evaluates `invoice_agent.adapter:answer` with the baseline worker and
-#      then the candidate worker, on two datasets:
-#        - the trajectory dataset (invoice_agent_v1.yaml), gated by `release_policy`
-#          (the baseline run is set as the `production` baseline);
-#        - the adversarial dataset (invoice_agent_safety_v1.yaml), gated by
-#          `safety_policy` against the baseline's safety run;
+#      then the candidate worker, on two datasets -- the trajectory dataset
+#      (invoice_agent_v1.yaml, gated by `release_policy`) and the adversarial
+#      dataset (invoice_agent_safety_v1.yaml, gated by `safety_policy`). Each
+#      baseline run is set as `production` for its own dataset (pointers are
+#      per application, environment and dataset);
 #   4. runs `agentforge gate` once per dataset and writes one combined
 #      Markdown report for the PR comment. The gate fails if either fails.
 #
@@ -92,6 +92,7 @@ BASE_RUN=$(evaluate baseline "base@${BASE_SHA:0:7}" invoice-agent) || finish 2 "
 if [ "$SAFETY" -eq 1 ]; then
     BASE_SAFETY_RUN=$(evaluate baseline "base@${BASE_SHA:0:7}" invoice-agent-safety) \
         || finish 2 "Evaluating the base branch's agent on the safety dataset failed."
+    "${AF[@]}" baseline set "$BASE_SAFETY_RUN" --env production --api-url "$API"
 fi
 echo "::endgroup::"
 
@@ -110,7 +111,7 @@ set +e
 code=$?
 safety_code=0
 if [ "$SAFETY" -eq 1 ]; then
-    "${AF[@]}" gate --candidate "$CANDIDATE_SAFETY_RUN" --baseline "$BASE_SAFETY_RUN" --policy safety_policy \
+    "${AF[@]}" gate --candidate "$CANDIDATE_SAFETY_RUN" --baseline production --policy safety_policy \
         --config "$BASE_DIR/agentforge.yaml" --api-url "$API" --markdown .gate/safety.md \
         --title "Safety dataset (invoice-agent-safety, safety_policy)"
     safety_code=$?

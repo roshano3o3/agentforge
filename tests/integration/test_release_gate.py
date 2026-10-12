@@ -250,7 +250,10 @@ async def test_gate_input_errors(client: AsyncClient, env: dict) -> None:
     # No production baseline yet.
     resp = await _gate(client, candidate)
     assert resp.status_code == 404
-    assert "no baseline set for application 'invoice-agent' in environment 'production'" in resp.json()["detail"]
+    assert (
+        "no baseline set for application 'invoice-agent', dataset 'invoice-agent' in environment 'production'"
+        in resp.json()["detail"]
+    )
     # A run id works as the baseline too.
     assert (await _gate(client, candidate, baseline=candidate)).json()["passed"] is True
     # The API validates the policy itself, whatever the client did.
@@ -331,3 +334,78 @@ async def test_baseline_pointer_is_checked_in_the_database(
                 await conn.execute(
                     text("UPDATE baselines SET run_id = :r WHERE environment = 'production'"), {"r": run_id}
                 )
+
+
+# -- baselines per dataset -------------------------------------------------------------
+
+SAFETY_DATASET = REPO / "datasets" / "invoice_agent_safety_v1.yaml"
+
+
+async def _publish_file(client: AsyncClient, path: Path) -> str:
+    name, _desc, cases, default_evaluators = validate_dataset_file(path)
+    dataset = (await client.post("/datasets", json={"name": name})).json()
+    version = (
+        await client.post(
+            f"/datasets/{dataset['id']}/versions",
+            json={"test_cases": [tc.model_dump() for tc in cases], "default_evaluators": default_evaluators},
+        )
+    ).json()
+    assert (await client.post(f"/datasets/{name}/versions/{version['version']}/publish")).status_code == 200
+    return version["id"]
+
+
+async def test_one_environment_points_to_a_different_run_per_dataset(client: AsyncClient, env: dict) -> None:
+    trajectory_run = await env["run"]("v1", V1)
+    safety_version = await _publish_file(client, SAFETY_DATASET)
+    safety_run = await env["run"]("v1", V1, safety_version)
+
+    for run_id in (trajectory_run, safety_run):
+        assert (await client.put("/baselines", json={"run_id": run_id, "environment": "production"})).status_code == 200
+    listed = (await client.get("/baselines", params={"environment": "production"})).json()
+    assert {(b["dataset_name"], b["run_id"]) for b in listed} == {
+        ("invoice-agent", trajectory_run),
+        ("invoice-agent-safety", safety_run),
+    }
+
+    # `--baseline production` resolves by the candidate's dataset.
+    trajectory_candidate = await env["run"]("v2", V2)
+    safety_candidate = await env["run"]("v2", V2, safety_version)
+    decision = (await _gate(client, trajectory_candidate)).json()
+    assert decision["baseline_run_id"] == trajectory_run
+    safety_policy = load_config(REPO / "agentforge.yaml").policies["safety_policy"].to_dict()
+    decision = (await _gate(client, safety_candidate, policy=safety_policy)).json()
+    assert decision["baseline_run_id"] == safety_run
+    assert decision["passed"] is False
+
+    # Re-pointing one dataset leaves the other's pointer alone.
+    await client.put("/baselines", json={"run_id": trajectory_candidate, "environment": "production"})
+    listed = (await client.get("/baselines", params={"environment": "production"})).json()
+    assert {(b["dataset_name"], b["run_id"]) for b in listed} == {
+        ("invoice-agent", trajectory_candidate),
+        ("invoice-agent-safety", safety_run),
+    }
+
+
+async def test_gate_against_an_environment_with_no_pointer_for_this_dataset(client: AsyncClient, env: dict) -> None:
+    await client.put("/baselines", json={"run_id": await env["run"]("v1", V1), "environment": "production"})
+    safety_version = await _publish_file(client, SAFETY_DATASET)
+    candidate = await env["run"]("v1", V1, safety_version)
+    resp = await _gate(client, candidate)
+    assert resp.status_code == 404
+    assert "no baseline set for application 'invoice-agent', dataset 'invoice-agent-safety'" in resp.json()["detail"]
+
+
+async def test_baseline_dataset_must_be_the_runs_dataset_in_the_database(
+    client: AsyncClient, env: dict, raw_engine: AsyncEngine
+) -> None:
+    run_id = await env["run"]("v1", V1)
+    await client.put("/baselines", json={"run_id": run_id, "environment": "production"})
+    await _publish_file(client, SAFETY_DATASET)
+    with pytest.raises(DBAPIError, match="same application and dataset"):
+        async with raw_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE baselines SET dataset_id = (SELECT id FROM datasets WHERE name = 'invoice-agent-safety') "
+                    "WHERE environment = 'production'"
+                )
+            )

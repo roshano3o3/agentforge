@@ -20,17 +20,31 @@ argument to a python adapter that declares one, and as a "scenario" field
 in an http adapter's request body. A python adapter that doesn't declare it
 can't run such a case: the case is recorded as an error rather than run
 without its setup, which would quietly test something else.
+
+Replay overrides (agentforge_sdk.replay): a python adapter that declared
+replay settings gets a replay's validated overrides as the `overrides`
+keyword argument -- only when there are some, so a replay without overrides
+calls the adapter exactly as a run does. `check_overrides` validates them
+against the declaration first; an adapter that declared nothing (and every
+http adapter) can't be given any.
+
+Trace context: a sync python adapter's daemon thread runs in a copy of the
+caller's context, so spans the agent opens (agentforge_sdk.tracing) are
+children of the worker's `invoke_agent` span; an http adapter receives a W3C
+`traceparent` header (and `tracestate`, if any) for that span.
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import dataclasses
 import importlib
 import inspect
 import json
 import math
+import re
 import threading
 import time
 import traceback
@@ -39,8 +53,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from opentelemetry import propagate
 
 from agentforge_sdk import AdapterOutput, Step
+from agentforge_sdk.replay import ReplaySettings, replay_settings, validate_overrides
 
 _MAX_ERROR_CHARS = 4000
 
@@ -103,7 +119,8 @@ def _string_list(data: dict[str, Any], key: str) -> list[str]:
 
 
 _STEP_KINDS = ("retrieval", "tool_call", "final_answer")
-_STEP_KEYS = {"kind", "name", "args", "result", "error", "retrieved_doc_ids", "output", "duration_ms"}
+_STEP_KEYS = {"kind", "name", "args", "result", "error", "retrieved_doc_ids", "output", "duration_ms", "span_id"}
+_SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _json_value(where: str, value: Any) -> Any:
@@ -153,6 +170,9 @@ def _steps(data: dict[str, Any]) -> list[Step]:
             or not math.isfinite(duration)
         ):
             raise AdapterOutputError(f"{where}.duration_ms must be a non-negative number or null")
+        span_id = item.get("span_id")
+        if span_id is not None and (not isinstance(span_id, str) or not _SPAN_ID.match(span_id)):
+            raise AdapterOutputError(f"{where}.span_id must be 16 lowercase hex characters or null")
         steps.append(
             Step(
                 kind=kind,
@@ -163,6 +183,7 @@ def _steps(data: dict[str, Any]) -> list[Step]:
                 retrieved_doc_ids=_string_list(item, "retrieved_doc_ids"),
                 output=output,
                 duration_ms=float(duration) if duration is not None else None,
+                span_id=span_id,
             )
         )
     return steps
@@ -187,13 +208,16 @@ def _describe(exc: BaseException) -> tuple[str, str]:
 
 def _call_in_daemon_thread(fn: Callable[[], Any]) -> concurrent.futures.Future:
     future: concurrent.futures.Future = concurrent.futures.Future()
+    # A new thread starts with an empty context; carry the caller's (the
+    # current span, among others) into it.
+    ctx = contextvars.copy_context()
 
     def target() -> None:
         start = time.perf_counter()
         error: BaseException | None = None
         result: Any = None
         try:
-            result = fn()
+            result = ctx.run(fn)
         except BaseException as exc:  # noqa: BLE001 - includes SystemExit; reported, never re-raised here
             error = exc
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -223,6 +247,7 @@ class PythonAdapter:
             raise AdapterLoadError(f"module '{module_path}' has no callable '{func_name}'")
         self._fn = fn
         self._target = target
+        self.replay_settings: ReplaySettings | None = replay_settings(fn)
         self._is_async = inspect.iscoroutinefunction(fn)
         try:
             self._takes_scenario = "scenario" in inspect.signature(fn).parameters
@@ -230,9 +255,16 @@ class PythonAdapter:
             self._takes_scenario = False
 
     async def call(
-        self, input_text: str, case_key: str, timeout: float, scenario: dict[str, Any] | None = None
+        self,
+        input_text: str,
+        case_key: str,
+        timeout: float,
+        scenario: dict[str, Any] | None = None,
+        overrides: dict[str, Any] | None = None,
     ) -> tuple[Any, float | None]:
         kwargs: dict[str, Any] = {}
+        if overrides:
+            kwargs["overrides"] = overrides  # validated by check_overrides against what the adapter declared
         if scenario is not None:
             if not self._takes_scenario:
                 raise ScenarioNotSupportedError(
@@ -250,17 +282,31 @@ class PythonAdapter:
 
 
 class HttpAdapter:
+    # An http adapter has no way to declare replay settings (yet).
+    replay_settings: ReplaySettings | None = None
+
     def __init__(self, url: str) -> None:
         self._url = url
         self._client = httpx.AsyncClient()
 
     async def call(
-        self, input_text: str, case_key: str, timeout: float, scenario: dict[str, Any] | None = None
+        self,
+        input_text: str,
+        case_key: str,
+        timeout: float,
+        scenario: dict[str, Any] | None = None,
+        overrides: dict[str, Any] | None = None,
     ) -> tuple[Any, float | None]:
+        if overrides:
+            raise AdapterLoadError("http adapters can't be given replay overrides")
         body: dict[str, Any] = {"input": input_text, "case_key": case_key}
         if scenario is not None:
             body["scenario"] = scenario
-        response = await asyncio.wait_for(self._client.post(self._url, json=body, timeout=timeout), timeout)
+        headers: dict[str, str] = {}
+        propagate.inject(headers)  # traceparent for the current (invoke_agent) span; nothing if not tracing
+        response = await asyncio.wait_for(
+            self._client.post(self._url, json=body, headers=headers, timeout=timeout), timeout
+        )
         if response.status_code // 100 != 2:
             raise AdapterOutputError(f"HTTP adapter returned {response.status_code}: {response.text[:500]}")
         try:
@@ -270,6 +316,12 @@ class HttpAdapter:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def check_overrides(adapter: PythonAdapter | HttpAdapter, overrides: dict[str, Any] | None, target: str) -> dict:
+    """The replay's overrides, validated against what the adapter declared
+    (agentforge_sdk.replay.OverrideError if they don't match)."""
+    return validate_overrides(adapter.replay_settings, overrides, target=target)
 
 
 def build_adapter(adapter_type: str | None, target: str | None) -> PythonAdapter | HttpAdapter:
@@ -286,6 +338,7 @@ async def invoke(
     case_key: str,
     timeout: float,
     scenario: dict[str, Any] | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> CaseOutcome:
     start = time.perf_counter()
 
@@ -293,7 +346,7 @@ async def invoke(
         return (time.perf_counter() - start) * 1000
 
     try:
-        raw, measured_ms = await adapter.call(input_text, case_key, timeout, scenario)
+        raw, measured_ms = await adapter.call(input_text, case_key, timeout, scenario, overrides)
         output = coerce_output(raw)
     except asyncio.CancelledError:
         raise  # the worker itself is being cancelled -- not the adapter's fault

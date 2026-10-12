@@ -1,5 +1,5 @@
 """AgentForge CLI: dataset publish/validate, adversarial generate, evaluate,
-runs list/show, baseline set/show, compare, gate.
+runs list/show, baseline set/show, compare (two runs, or several models), gate, replay, rescore.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -9,6 +9,7 @@ completed or failed and prints the persisted results.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import time
@@ -35,7 +36,7 @@ if sys.platform == "win32":
 import yaml
 from pydantic import ValidationError
 
-from agentforge_cli import adversarial
+from agentforge_cli import adversarial, benchmark
 from agentforge_cli.dataset_io import DatasetFileError, validate_dataset_file
 from agentforge_cli.git_utils import current_commit_sha
 from agentforge_cli.release_io import (
@@ -46,7 +47,10 @@ from agentforge_cli.release_io import (
     markdown_report,
     verdict_line,
 )
+from agentforge_cli.replay_io import OverrideArgsError, build_overrides, print_replay
+from agentforge_cli.rescore_io import print_rescore, split_evaluators
 from agentforge_core.schemas import FIXTURE_BASED_LABEL, LOCAL_DETERMINISTIC, AdapterSpec
+from agentforge_evaluators import PricingConfigError, parse_pricing
 from agentforge_sdk import AgentForgeClient
 
 app = typer.Typer(add_completion=False, help="AgentForge command-line interface.")
@@ -411,6 +415,111 @@ def _print_run(run: dict[str, Any]) -> None:
         console.print(f"dataset content hash: {run['dataset_content_hash']}")
 
 
+@app.command()
+def replay(
+    result_id: str = typer.Argument(..., help="A case's result id in a run (results[].id, e.g. from GET /runs/{id})."),
+    set_: list[str] = typer.Option(
+        [],
+        "--set",
+        help="Override key=value (repeatable). The value is parsed as JSON when it is JSON (3, true, {...}), "
+        "otherwise taken as a string. Which keys exist is declared by the adapter.",
+    ),
+    prompt_file: Path | None = typer.Option(
+        None, "--prompt-file", help="Set the `prompt` override to this file's text (adapters that declare one)."
+    ),
+    retrieval_config: Path | None = typer.Option(
+        None, "--retrieval-config", help="Set the `retrieval_config` override from this YAML/JSON object."
+    ),
+    poll_interval: float = typer.Option(0.5, "--poll-interval", help="Seconds between status checks."),
+    wait_timeout: float = typer.Option(300.0, "--wait-timeout", help="Stop waiting after this many seconds."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url", help="AgentForge API base URL."),
+) -> None:
+    """Re-run one evaluated case (same input, scenario, dataset version and
+    evaluator versions), optionally with overrides, and print it against the
+    original. Executed by the worker, like runs.
+
+    Exit code: 0 completed, 1 failed (including overrides the adapter rejects)
+    or setup error, 2 still unfinished when --wait-timeout elapsed.
+    """
+    try:
+        overrides = build_overrides(set_, prompt_file, retrieval_config)
+    except OverrideArgsError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            current = client.create_replay(result_id, overrides)
+        except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
+            console.print(f"[red]Replay not created:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+        console.print(f"Submitted replay [bold]{current['id']}[/bold] of {escape(current['case_key'])}")
+        deadline = time.monotonic() + wait_timeout
+        while current["status"] not in FINISHED:
+            if time.monotonic() > deadline:
+                console.print(f"[yellow]Still {current['status']} after {wait_timeout:g}s; stopped waiting.[/yellow]")
+                raise typer.Exit(code=2)
+            time.sleep(poll_interval)
+            try:
+                current = client.get_replay(current["id"])
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]Lost contact with the API while waiting:[/red] {escape(str(exc))}")
+                raise typer.Exit(code=1) from None
+    print_replay(console, current)
+    if current["status"] == "failed":
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def rescore(
+    run_id: str = typer.Argument(..., help="A completed run id."),
+    evaluators: list[str] = typer.Option(
+        ...,
+        "--evaluators",
+        "-e",
+        help="Evaluator versions to score with, name@version or a bare name (its latest version); repeatable "
+        "or comma-separated. Each replaces the run's pinned version of that evaluator.",
+    ),
+    show_all: bool = typer.Option(False, "--all", help="List every case, not only the ones that changed."),
+    poll_interval: float = typer.Option(0.5, "--poll-interval", help="Seconds between status checks."),
+    wait_timeout: float = typer.Option(300.0, "--wait-timeout", help="Stop waiting after this many seconds."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url", help="AgentForge API base URL."),
+) -> None:
+    """Score a completed run's stored outputs again with other evaluator versions and print the
+    verdicts before and after. No adapter (and no model) is called; the original run is not changed.
+    Executed by the worker, like runs.
+
+    Exit code: 0 completed, 1 failed or setup error, 2 still unfinished when --wait-timeout elapsed.
+    """
+    requested = split_evaluators(evaluators)
+    if not requested:
+        raise typer.BadParameter("--evaluators needs at least one evaluator", param_hint="--evaluators")
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            current = client.create_rescore(run_id, requested)
+        except Exception as exc:  # noqa: BLE001 - surface any API/network error to the user
+            console.print(f"[red]Re-score not created:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+        console.print(f"Submitted re-score [bold]{current['id']}[/bold] of run {run_id}")
+        deadline = time.monotonic() + wait_timeout
+        while current["status"] not in FINISHED:
+            if time.monotonic() > deadline:
+                console.print(f"[yellow]Still {current['status']} after {wait_timeout:g}s; stopped waiting.[/yellow]")
+                raise typer.Exit(code=2)
+            time.sleep(poll_interval)
+            try:
+                current = client.get_rescore(current["id"])
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]Lost contact with the API while waiting:[/red] {escape(str(exc))}")
+                raise typer.Exit(code=1) from None
+        try:
+            run = client.get_run(run_id)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not fetch the original run:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    print_rescore(console, current, run, show_all=show_all)
+    if current["status"] == "failed":
+        raise typer.Exit(code=1)
+
+
 @runs_app.command("list")
 def runs_list(api_url: str = typer.Option(DEFAULT_API_URL, "--api-url")) -> None:
     """List evaluation runs, most recent first."""
@@ -473,7 +582,7 @@ def baseline_set(
     env: str = typer.Option(..., "--env", help="Environment name, e.g. production."),
     api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
 ) -> None:
-    """Point (the run's application, ENV) at RUN_ID. Only the pointer changes."""
+    """Point (the run's application, ENV, the run's dataset) at RUN_ID. Only the pointer changes."""
     with AgentForgeClient(base_url=api_url) as client:
         try:
             row = client.set_baseline(run_id, env)
@@ -552,11 +661,64 @@ def _print_regression(report: dict[str, Any]) -> None:
 
 @app.command()
 def compare(
-    baseline: str = typer.Option(..., "--baseline", help="Baseline run id."),
-    candidate: str = typer.Option(..., "--candidate", help="Candidate run id."),
+    baseline: str | None = typer.Option(None, "--baseline", help="Baseline run id (run-vs-run regression)."),
+    candidate: str | None = typer.Option(None, "--candidate", help="Candidate run id (run-vs-run regression)."),
+    models: str | None = typer.Option(
+        None,
+        "--models",
+        help="Model comparison: comma-separated specs, e.g. scripted,anthropic:claude-haiku-4-5,ollama:llama3.1:8b.",
+    ),
+    plan_file: Path | None = typer.Option(
+        None,
+        "--plan",
+        help="Model comparison from a plan file: models in run order, each with its datasets, repeats and timeout "
+        "(the default comparison: benchmarks/compare.yaml). Replaces --models/--datasets/--repeats.",
+    ),
+    datasets: str = typer.Option(
+        "invoice-agent,invoice-agent-safety", "--datasets", help="Comma-separated published dataset names."
+    ),
+    repeats: int = typer.Option(1, "--repeats", min=1, max=20, help="Runs per model and dataset."),
+    max_cost: float = typer.Option(5.0, "--max-cost", min=0, help="Spend cap in USD (estimated) for the whole run."),
+    yes: bool = typer.Option(
+        False, "--yes", help="Start even if the estimate is over --max-cost (the cap still holds)."
+    ),
+    prompt_file: Path | None = typer.Option(None, "--prompt-file", help="Base system prompt for the LLM planner."),
+    temperature: float = typer.Option(0.0, "--temperature", min=0, max=2, help="Sampling temperature (LLM models)."),
+    timeout: float = typer.Option(
+        120.0, "--timeout", min=1, max=600, help="Per-case timeout (s) for LLM models; a plan entry may set its own."
+    ),
+    pricing_file: Path = typer.Option(Path("config/pricing.yaml"), "--pricing-file", help="Pricing table."),
+    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Where keys are looked up besides the env."),
+    output: Path | None = typer.Option(None, "--output", help="Results JSON (default: benchmarks/<date>-....json)."),
     api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
 ) -> None:
-    """Regression report between two completed runs of the same dataset version."""
+    """Regression report between two runs (--baseline/--candidate), or a model comparison (--models / --plan)."""
+    if models is not None or plan_file is not None:
+        if baseline or candidate:
+            raise typer.BadParameter("use either --models/--plan or --baseline/--candidate, not both")
+        if models is not None and plan_file is not None:
+            raise typer.BadParameter("use either --models or --plan, not both")
+        if plan_file is not None:
+            try:
+                plan_spec = benchmark.load_plan_file(plan_file)
+            except benchmark.BenchmarkError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+        else:
+            try:
+                specs = list(dict.fromkeys(benchmark.parse_model_spec(m) for m in benchmark.split_list(models or "")))
+            except benchmark.BenchmarkError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            names = tuple(benchmark.split_list(datasets))
+            if not specs or not names:
+                raise typer.BadParameter("--models and --datasets need at least one entry each")
+            plan_spec = benchmark.PlanFile(specs, {s.raw: benchmark.ModelPlan(names, repeats) for s in specs})
+        _compare_models(
+            plan_spec, repeats, max_cost, yes, prompt_file, temperature, timeout, pricing_file, env_file, output,
+            api_url,
+        )  # fmt: skip
+        return
+    if not (baseline and candidate):
+        raise typer.BadParameter("pass --baseline and --candidate (two run ids), --models, or --plan")
     with AgentForgeClient(base_url=api_url) as client:
         try:
             report = client.regression(baseline, candidate)
@@ -564,6 +726,212 @@ def compare(
             console.print(f"[red]Could not compare:[/red] {escape(str(exc))}")
             raise typer.Exit(code=1) from None
     _print_regression(report)
+
+
+def _planner_texts(prompt_file: Path | None) -> tuple[str | None, str, int, int]:
+    """(prompt to send or None for the built-in, prompt source label, prompt chars, tool-schema chars)."""
+    if prompt_file is not None:
+        text = prompt_file.read_text(encoding="utf-8")
+        source = f"file {prompt_file.as_posix()}"
+    else:
+        text, source = None, "built-in (examples/invoice_agent/invoice_agent/prompts/system.md)"
+    try:  # sizes for the estimate, from the agent itself when it's installed here
+        from invoice_agent.llm_planner import builtin_prompt, tool_schemas
+        from invoice_agent.tools import TOOLS
+
+        prompt_chars = len(text if text is not None else builtin_prompt())
+        schema_chars = len(json.dumps(tool_schemas(TOOLS)))
+    except ImportError:
+        prompt_chars, schema_chars = len(text or "") or 3000, 4000
+    return text, source, prompt_chars, schema_chars
+
+
+def _prompt_hash(prompt: str | None) -> str | None:
+    if prompt is not None:
+        return benchmark.sha256_text(prompt)
+    try:
+        from invoice_agent.llm_planner import builtin_prompt
+
+        return benchmark.sha256_text(builtin_prompt())
+    except ImportError:
+        return None
+
+
+def _cell(summary: dict[str, Any], kind: str) -> str:
+    mean = summary["mean"]
+    if mean is None:
+        return "-"
+    fmt = {"rate": "{:.2f}", "ms": "{:.0f}", "tokens": "{:.0f}", "usd": "{:.5f}"}[kind]
+    text = fmt.format(mean)
+    if summary["n"] > 1 and summary["min"] != summary["max"]:
+        text += f" ({fmt.format(summary['min'])}-{fmt.format(summary['max'])})"
+    return text
+
+
+_COLUMNS = (
+    ("pass_rate", "pass", "rate"),
+    ("tool_selection", "tool_sel", "rate"),
+    ("approval_required", "approval", "rate"),
+    ("injection_direct", "inj direct", "rate"),
+    ("injection_indirect", "inj indirect", "rate"),
+    ("unauthorized_tool", "unauth tool", "rate"),
+    ("pii_probe", "pii probe", "rate"),
+    ("latency_p50_ms", "P50 ms", "ms"),
+    ("latency_p95_ms", "P95 ms", "ms"),
+    ("tokens_per_case", "tokens/case", "tokens"),
+    ("cost_per_case_usd", "est. $/case", "usd"),
+)
+
+
+def _compare_models(
+    plan_spec: benchmark.PlanFile,
+    repeats: int,
+    max_cost: float,
+    yes: bool,
+    prompt_file: Path | None,
+    temperature: float,
+    timeout: float,
+    pricing_file: Path,
+    env_file: Path,
+    output: Path | None,
+    api_url: str,
+) -> None:
+    specs = plan_spec.specs
+    dataset_names = plan_spec.dataset_names
+    try:
+        pricing = parse_pricing(yaml.safe_load(pricing_file.read_text(encoding="utf-8")))
+    except (OSError, PricingConfigError, yaml.YAMLError) as exc:
+        console.print(f"[red]Can't read the pricing file {escape(str(pricing_file))}:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=1) from None
+    prompt, prompt_source, prompt_chars, schema_chars = _planner_texts(prompt_file)
+    env = benchmark.environment(env_file)
+    ollama_host = env.get("OLLAMA_HOST", "").strip() or benchmark.DEFAULT_OLLAMA_HOST
+    ollama_cache: list[list[str] | None] = []
+
+    def ollama() -> list[str] | None:
+        if not ollama_cache:
+            ollama_cache.append(benchmark.ollama_models(ollama_host))
+        return ollama_cache[0]
+
+    skipped = {s.raw: why for s in specs if (why := benchmark.skip_reason(s, env, pricing, ollama)) is not None}
+    for raw, why in skipped.items():
+        console.print(f"[yellow]Skipping {escape(raw)}:[/yellow] {escape(why)}")
+
+    with AgentForgeClient(base_url=api_url) as client:
+        try:
+            versions = [client.get_dataset_version(name, "latest") for name in dataset_names]
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not load the datasets:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+        dataset_rows = [
+            {
+                "id": v["id"],
+                "name": name,
+                "version": v["version"],
+                "content_hash": v.get("content_hash"),
+                "cases": len(v["test_cases"]),
+            }
+            for name, v in zip(dataset_names, versions, strict=True)
+        ]
+        base_tokens = benchmark.base_input_tokens(prompt_chars, schema_chars)
+        runnable = [s for s in specs if s.raw not in skipped]
+        plan = benchmark.Plan(specs, skipped, dataset_rows, repeats, [], plan_spec.entries)
+        measured = benchmark.measured_costs(
+            output.parent if output is not None else Path("benchmarks"),
+            benchmark.pricing_file_sha256(pricing_file),
+            benchmark.pricing_history(pricing_file),
+        )
+        plan.estimates = [
+            benchmark.estimate(
+                s,
+                sum(d["cases"] for d in plan.datasets_for(s)),
+                plan.repeats_for(s),
+                base_tokens,
+                pricing,
+                datasets=[(d["name"], d["cases"]) for d in plan.datasets_for(s)],
+                measured=measured,
+            )
+            for s in runnable
+        ]
+        if not runnable:
+            console.print("[red]No model can run here; nothing was started.[/red]")
+            raise typer.Exit(code=1)
+
+        table = Table(title="Estimated cost before running")
+        for col in ("model", "cases x repeats", "basis", "tokens/case", "est. USD"):
+            table.add_column(col)
+        for e in plan.estimates:
+            if e.basis == "measured":
+                basis = f"measured ({e.measured_runs} run(s))"
+                tokens = f"{e.measured_tokens_per_case:.0f} in+out" if e.measured_tokens_per_case else "-"
+            elif e.input_tokens_per_case:
+                basis, tokens = "assumed (deliberately high)", f"{e.input_tokens_per_case}+{e.output_tokens_per_case}"
+            else:
+                basis, tokens = "-", "- (no model)"
+            table.add_row(escape(e.spec), f"{e.cases} x {e.runs}", basis, tokens, f"${e.usd:.4f}")
+        table.add_row("[bold]total[/bold]", "", "", "", f"[bold]${plan.total_estimate:.4f}[/bold]")
+        console.print(table)
+        console.print(f"Assumptions: {escape(benchmark.estimate_assumptions())}")
+        if plan.total_estimate > max_cost and not yes:
+            console.print(
+                f"[red]Refusing to start: the estimate ${plan.total_estimate:.4f} is over "
+                f"--max-cost ${max_cost:g}.[/red] Lower --repeats or the model list, raise --max-cost, "
+                "or pass --yes (the cap is still enforced)."
+            )
+            raise typer.Exit(code=1)
+
+        started_at = benchmark.now()
+        try:
+            outcome = benchmark.execute(
+                client,
+                plan,
+                temperature=temperature,
+                prompt=prompt,
+                max_cost=max_cost,
+                timeout_seconds=timeout,
+                pricing=pricing,
+                git_commit_sha=current_commit_sha(),
+                log=lambda line: console.print(escape(line)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Comparison stopped:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+
+    doc = benchmark.document(
+        plan,
+        outcome,
+        created_at=started_at,
+        temperature=temperature,
+        prompt_source=prompt_source,
+        prompt_sha256=_prompt_hash(prompt),
+        max_cost=max_cost,
+        git_commit_sha=current_commit_sha(),
+        timeout_seconds=timeout,
+    )
+    benchmark.validate_document(doc)
+
+    results = Table(title="Model comparison (mean over completed repeats; min-max in parentheses)")
+    results.add_column("model")
+    results.add_column("dataset")
+    for _key, header, _kind in _COLUMNS:
+        results.add_column(header, justify="right")
+    for row in doc["results"]:
+        results.add_row(
+            escape(row["model"]),
+            escape(row["dataset"]),
+            *(_cell(row["summary"][key], kind) for key, _header, kind in _COLUMNS),
+        )
+    console.print(results)
+    console.print(
+        "Synthetic invoice tasks scored by deterministic evaluators (no LLM judge); cost is estimated "
+        f"(reported tokens x {escape(pricing_file.as_posix())}). Actual estimated spend: ${outcome.spent_usd:.4f}."
+    )
+    if outcome.stopped_reason:
+        console.print(f"[yellow]{escape(outcome.stopped_reason)}[/yellow]")
+    path = output or benchmark.default_output_path(Path("benchmarks"), started_at, doc)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    console.print(f"Saved {escape(path.as_posix())}")
 
 
 @app.command()

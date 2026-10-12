@@ -41,6 +41,12 @@ its setup. An http adapter gets it as a `"scenario"` field in the request
 body, only when the case has one. It describes the environment only: the
 case's attack category and expectations are never sent.
 
+**Replay overrides** (failure replay): a python adapter may declare settings
+a replay can change -- `@replayable(Setting(...))` from agentforge_sdk.replay
+-- and take an `overrides` keyword argument. It receives validated values
+only, and only when a replay sets some; anything it didn't declare is
+rejected before it's called.
+
 This module is deliberately plain dataclasses: no server, DB, or framework
 imports, so any application can depend on it.
 """
@@ -64,7 +70,9 @@ class Step:
     * ``final_answer``: ``output`` is the answer text.
 
     ``duration_ms`` is optional and, like everything here, only ever reported
-    by the agent -- AgentForge doesn't invent timings.
+    by the agent -- AgentForge doesn't invent timings. So is ``span_id``: the
+    16-hex-digit id of the span the agent opened for this step (see
+    agentforge_sdk.tracing), which links the stored step to its span.
     """
 
     kind: StepKind
@@ -75,6 +83,7 @@ class Step:
     retrieved_doc_ids: list[str] = field(default_factory=list)
     output: str | None = None
     duration_ms: float | None = None
+    span_id: str | None = None
 
 
 @dataclass

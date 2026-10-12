@@ -46,10 +46,10 @@ async def test_a_run_applies_exactly_each_cases_configured_evaluators(
     ids = await _setup(client, CASES, default_evaluators=DEFAULT)
     run = await _create(client, _payload(ids))
 
-    # Pinned: exactly the evaluators the configs reference -- not all nine.
+    # Pinned: exactly the evaluators the configs reference -- not all nine -- each at its latest version.
     assert sorted(run["evaluators"]) == [
-        "answer_contains@1.0.0",
-        "answer_regex@1.0.0",
+        "answer_contains@1.1.0",
+        "answer_regex@1.1.0",
         "heuristic_context_precision@1.0.0",
         "latency@1.0.0",
     ]
@@ -70,7 +70,7 @@ async def test_a_run_applies_exactly_each_cases_configured_evaluators(
     # Aggregates only count cases an evaluator actually applied to.
     metrics = done["aggregates"]["metrics"]
     assert metrics["heuristic_context_precision@1.0.0"]["scored_count"] == 2
-    assert metrics["answer_regex@1.0.0"]["scored_count"] == 1
+    assert metrics["answer_regex@1.1.0"]["scored_count"] == 1
     assert "exact_match@1.0.0" not in metrics
 
 

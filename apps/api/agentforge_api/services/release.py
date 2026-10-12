@@ -73,20 +73,27 @@ async def baseline_out(session: AsyncSession, row: Baseline) -> BaselineOut:
 
 
 async def resolve_baseline(session: AsyncSession, candidate: EvaluationRun, ref: str) -> EvaluationRun:
-    """`ref` is a run id, or an environment whose baseline pointer (for the
-    candidate's application) names the run."""
+    """`ref` is a run id, or an environment whose baseline pointer for the
+    candidate's application *and the candidate's dataset* names the run."""
     if await session.get(EvaluationRun, ref) is not None:
         return await completed_run(session, ref, "baseline")
+    dataset_version = await session.get(DatasetVersion, candidate.dataset_version_id)
+    assert dataset_version is not None
     pointer = await session.scalar(
-        select(Baseline).where(Baseline.application_id == candidate.application_id, Baseline.environment == ref)
+        select(Baseline).where(
+            Baseline.application_id == candidate.application_id,
+            Baseline.environment == ref,
+            Baseline.dataset_id == dataset_version.dataset_id,
+        )
     )
     if pointer is None:
         app = await session.get(Application, candidate.application_id)
+        dataset = await session.get(Dataset, dataset_version.dataset_id)
         name = app.name if app else candidate.application_id
         raise HTTPException(
             status_code=404,
-            detail=f"no baseline set for application '{name}' in environment '{ref}' "
-            f"(set one with: agentforge baseline set <run_id> --env {ref})",
+            detail=f"no baseline set for application '{name}', dataset '{dataset.name if dataset else '?'}' "
+            f"in environment '{ref}' (set one with: agentforge baseline set <run_id> --env {ref})",
         )
     return await completed_run(session, pointer.run_id, "baseline")
 

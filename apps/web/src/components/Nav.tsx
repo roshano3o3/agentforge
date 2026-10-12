@@ -29,9 +29,6 @@ export default function Nav() {
           {link.label}
         </Link>
       ))}
-      <span className="nav-link disabled" title="Built in a later phase">
-        Trace Explorer
-      </span>
     </nav>
   );
 }

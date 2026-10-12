@@ -41,7 +41,8 @@ def case(**overrides: Any) -> EvalInput:
 
 
 def run(name: str, c: EvalInput, config: EvalConfig = CONFIG, **params: Any):
-    return resolve(name).fn(c, config, params)
+    # These tests pin the 1.0.0 behavior (the @1.1.0 answer checks: tests/unit/test_answer_facts.py).
+    return resolve(name if "@" in name else f"{name}@1.0.0").fn(c, config, params)
 
 
 # -- registry ----------------------------------------------------------------
