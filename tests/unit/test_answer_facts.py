@@ -16,6 +16,7 @@ from agentforge_evaluators import facts as F
 
 CALIBRATION = Path(__file__).parents[2] / "datasets" / "calibration" / "answer_checks_v1.yaml"
 HOLDOUT = CALIBRATION.with_name("answer_checks_holdout_v1.yaml")
+MUTANTS = CALIBRATION.with_name("answer_checks_mutants_v1.yaml")
 
 
 @pytest.mark.parametrize(
@@ -151,3 +152,28 @@ def test_holdout_agreement_is_pinned() -> None:
     # 1.0.0 wants the scripted wording: "2 payment(s)" / "350.00 USD" (hold-004 says "two payments", "350.00"),
     # "can't make that change" (hold-007/008 say "can't help with changing")
     assert old.false_positives == ["hold-004", "hold-007", "hold-008"]
+
+
+def test_mutant_detection_is_pinned() -> None:
+    """Detection of one-fact mutants of held-out answers (every one labeled incorrect; a miss is a false
+    negative). Not tuned: @1.1.0 was frozen before the mutants existed. Its misses are facts the check's
+    params don't name (amount, currency, invoice id, a customer name in a refusal) and two negations dropped
+    inside a graceful_tool_failure report, plus "I found invoice INV-9999 (... not found)"."""
+    items = cal.load(MUTANTS)
+    old = cal.total(cal.agreement(items, "1.0.0"), "1.0.0")
+    new = cal.total(cal.agreement(items, "1.1.0"), "1.1.0")
+    assert (old.items, old.agree, len(old.false_positives), len(old.false_negatives)) == (30, 11, 0, 19)
+    assert (new.items, new.agree, len(new.false_positives), len(new.false_negatives)) == (30, 11, 0, 19)
+    by_type: dict[str, list[int]] = {}
+    for item in items:
+        caught = cal.verdict(item, "1.1.0") is False
+        by_type.setdefault(item["mutation"]["type"], [0, 0])[caught] += 1
+    assert {t: tuple(v) for t, v in by_type.items()} == {  # (missed, caught) at 1.1.0
+        "wrong_amount": (5, 0),
+        "wrong_currency": (4, 0),
+        "wrong_invoice_id": (5, 0),
+        "wrong_recipient": (2, 2),
+        "success_after_failure": (0, 5),
+        "unperformed_action": (0, 4),
+        "dropped_negation": (3, 0),
+    }
