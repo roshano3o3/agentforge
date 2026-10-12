@@ -3,10 +3,12 @@ and how it joins a run's evaluators (DEFAULT_ANSWER_EVALUATORS)."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from agentforge_cli import calibration as cal
 from agentforge_evaluators import (
     DEFAULT_ANSWER_EVALUATORS,
     DEFAULT_EVALUATORS,
@@ -133,3 +135,27 @@ def test_default_answer_evaluators_join_configured_runs_only() -> None:
     assert effective_config(default, None, pinned) == {"tool_selection": {}, "answer_grounded@1.0.0": {}}
     assert effective_config(default, {"answer_grounded": False}, pinned) == {"tool_selection": {}}
     assert effective_config(default, None, ["tool_selection@1.0.0"]) == {"tool_selection": {}}  # not pinned: not run
+
+
+CALIBRATION_DIR = Path(__file__).parents[2] / "datasets" / "calibration"
+
+
+def _flagged(file: str) -> list[str]:
+    return [
+        i["id"]
+        for i in cal.load(CALIBRATION_DIR / file)
+        if GROUNDED(cal.eval_input(i), EvalConfig(), {}).passed is False
+    ]
+
+
+def test_calibration_numbers_are_pinned() -> None:
+    """Dev = the dev correct answers and the 30 dev mutants (written against: in-sample). Held-out = the
+    held-out correct answers and the 27 fresh mutants, run once after the evaluator was committed. Its two
+    held-out false positives are reported, not fixed (a fix would make the held-out number in-sample):
+    hold-005 binds "already paid" to both invoices in its clause; hold-006 reads "$350.00 has been paid" as
+    the invoice's status."""
+    dev = _flagged("answer_checks_v1.yaml")
+    assert dev == ["cal-030", "cal-031"]  # 2 of the 10 incorrect (false claims); none of the 35 correct
+    assert _flagged("answer_checks_holdout_v1.yaml") == ["hold-005", "hold-006"]
+    assert len(_flagged("answer_checks_mutants_v1.yaml")) == 30
+    assert len(_flagged("answer_checks_mutants_holdout_v1.yaml")) == 27
