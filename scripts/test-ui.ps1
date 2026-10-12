@@ -29,6 +29,7 @@ try {
     docker compose up -d --wait redis
     if ($LASTEXITCODE -ne 0) { throw "could not start redis" }
     docker compose exec -T redis redis-cli -n 2 FLUSHDB | Out-Null
+    $env:AGENTFORGE_GIT_SHA = & (Join-Path $PSScriptRoot "git-sha.ps1")  # the worker image records it
     docker compose build worker
     if ($LASTEXITCODE -ne 0) { throw "worker image build failed" }
     docker rm -f $E2EWorker 2>$null | Out-Null

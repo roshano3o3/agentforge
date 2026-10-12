@@ -9,8 +9,16 @@ from sqlalchemy.orm import selectinload
 
 from agentforge_api.db.base import get_session
 from agentforge_api.models.dataset import Dataset, DatasetVersion, DatasetVersionStatus, TestCase
+from agentforge_core.scenario import ScenarioError, validate_scenario
 from agentforge_core.schemas import DatasetCreate, DatasetOut, DatasetVersionOut, DatasetVersionTestCasesRequest
-from agentforge_evaluators import EvaluatorConfigError, TrajectoryConfigError, validate_config, validate_trajectory
+from agentforge_evaluators import (
+    EvaluatorConfigError,
+    SafetyConfigError,
+    TrajectoryConfigError,
+    validate_config,
+    validate_safety,
+    validate_trajectory,
+)
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -40,6 +48,8 @@ _CASE_FIELDS = (
     "tags",
     "evaluators",
     "trajectory",
+    "scenario",
+    "safety",
 )
 
 
@@ -51,8 +61,9 @@ def _case_values(source: object) -> dict:
 
 def _validated(payload: DatasetVersionTestCasesRequest) -> DatasetVersionTestCasesRequest:
     """Check every evaluator config against the registry (names, versions,
-    params) and every trajectory block against the trajectory keys before
-    anything is written. 422 names the case and the problem."""
+    params), every trajectory block against the trajectory keys, and every
+    scenario and safety block against theirs, before anything is written.
+    422 names the case and the problem."""
     try:
         payload.default_evaluators = validate_config(payload.default_evaluators, allow_disable=False)
         for tc in payload.test_cases:
@@ -69,6 +80,14 @@ def _validated(payload: DatasetVersionTestCasesRequest) -> DatasetVersionTestCas
             raise HTTPException(
                 status_code=422, detail=f"invalid trajectory: test case '{tc.case_key}': {exc}"
             ) from exc
+        try:
+            tc.scenario = validate_scenario(tc.scenario)
+        except ScenarioError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid scenario: test case '{tc.case_key}': {exc}") from exc
+        try:
+            tc.safety = validate_safety(tc.safety)
+        except SafetyConfigError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid safety: test case '{tc.case_key}': {exc}") from exc
     return payload
 
 

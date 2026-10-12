@@ -1,0 +1,163 @@
+{
+  "actual_spend_usd": 0.0,
+  "agentforge": {
+    "code_versions": [
+      "6a487e67c143898d05ac9089a332cc621e6b83b5"
+    ],
+    "git_commit": "6a487e67c143898d05ac9089a332cc621e6b83b5",
+    "pricing_sha256": [
+      "bfd5c3fb7d8ea2ea98690a88b72cb95ec44bf857e19daa7ed51676b520faa66d"
+    ]
+  },
+  "created_at": "2026-10-12T20:01:03.654643+00:00",
+  "datasets": [
+    {
+      "cases": 10,
+      "content_hash": "sha256:fc5df9d848d55a7c1319437f9f2562f20fbe3f7a6f468dac0803548122157842",
+      "name": "invoice-agent",
+      "version": 3
+    }
+  ],
+  "date": "2026-10-12",
+  "estimate": {
+    "assumptions": "measured models: the mean estimated cost per case of their earlier runs in benchmarks/ (same pricing file; per dataset, else over all datasets they ran). Others: 5 model turns per case; each turn resends the system prompt and tool schemas (chars/3 + 500 tool-use tokens) plus 300 tokens of history per earlier turn; output 400 tokens per turn (2000 for reasoning models); standard rates from the pricing file",
+    "per_model": [
+      {
+        "basis": "assumed",
+        "cases": 10,
+        "measured_runs": 0,
+        "model": "ollama:llama3.1-tools:8b",
+        "runs_per_dataset": 1,
+        "usd": 0.0
+      }
+    ],
+    "total_usd": 0.0
+  },
+  "labels": [
+    "synthetic invoice tasks (examples/invoice_agent)",
+    "deterministic evaluators -- no LLM judge",
+    "cost is estimated: reported tokens x config/pricing.yaml"
+  ],
+  "models": [
+    {
+      "datasets": [
+        "invoice-agent"
+      ],
+      "model": "llama3.1-tools:8b",
+      "provider": "ollama",
+      "repeats": 1,
+      "reported_model": "ollama/llama3.1-tools:8b",
+      "skipped": null,
+      "spec": "ollama:llama3.1-tools:8b",
+      "timeout_seconds": 600.0
+    }
+  ],
+  "not_run": [],
+  "results": [
+    {
+      "dataset": "invoice-agent",
+      "model": "ollama:llama3.1-tools:8b",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 0.6666666666666666,
+            "cost_per_case_usd": 0.0,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 11855.34765400007,
+            "latency_p95_ms": 40667.73185200054,
+            "pass_rate": 0.3,
+            "pii_probe": null,
+            "tokens_per_case": 2620.5,
+            "tool_selection": 0.4,
+            "unauthorized_tool": null
+          },
+          "run_id": "0ffd9b73-a68f-4b26-9560-d5bae31d640c",
+          "spend_usd": 0.0,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 0.6666666666666666,
+          "mean": 0.6666666666666666,
+          "min": 0.6666666666666666,
+          "n": 1
+        },
+        "cost_per_case_usd": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "n": 1
+        },
+        "injection_direct": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_indirect": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "latency_p50_ms": {
+          "max": 11855.34765400007,
+          "mean": 11855.34765400007,
+          "min": 11855.34765400007,
+          "n": 1
+        },
+        "latency_p95_ms": {
+          "max": 40667.73185200054,
+          "mean": 40667.73185200054,
+          "min": 40667.73185200054,
+          "n": 1
+        },
+        "pass_rate": {
+          "max": 0.3,
+          "mean": 0.3,
+          "min": 0.3,
+          "n": 1
+        },
+        "pii_probe": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tokens_per_case": {
+          "max": 2620.5,
+          "mean": 2620.5,
+          "min": 2620.5,
+          "n": 1
+        },
+        "tool_selection": {
+          "max": 0.4,
+          "mean": 0.4,
+          "min": 0.4,
+          "n": 1
+        },
+        "unauthorized_tool": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        }
+      }
+    }
+  ],
+  "schema": "agentforge.benchmark/v1",
+  "settings": {
+    "max_cost_usd": 0.5,
+    "prompt": {
+      "sha256": "d91fb343a1fe090681d72f2df2c792d6437f1c13a93944e937a72fa3668f99ca",
+      "source": "built-in (examples/invoice_agent/invoice_agent/prompts/system.md)"
+    },
+    "repeats": 1,
+    "temperature": 0.0,
+    "timeout_seconds": 600.0
+  },
+  "stopped_reason": null
+}

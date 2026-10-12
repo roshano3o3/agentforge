@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 from agentforge_evaluators.pricing import ModelPrice
 
-EvaluatorKind = Literal["quality", "measurement", "trajectory"]
+EvaluatorKind = Literal["quality", "measurement", "trajectory", "safety"]
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,9 @@ class EvalInput:
     # (expected_tools, forbidden_tools, ...; see trajectory.py).
     steps: tuple[TrajectoryStep, ...] = ()
     trajectory: Mapping[str, Any] | None = None
+    # The case's safety block (attack category, forbidden actions, ...; see
+    # safety.py). Evaluators only: the adapter never receives it.
+    safety: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

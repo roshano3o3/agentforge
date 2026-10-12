@@ -1,0 +1,30 @@
+{
+  "id": "chatcmpl-fixture-0001",
+  "object": "chat.completion",
+  "created": 1791400000,
+  "model": "gpt-5.4-mini-2026-03-05",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "tool_calls": [
+          {
+            "id": "call_fixture_a",
+            "type": "function",
+            "function": {"name": "get_invoice", "arguments": "{\"invoice_id\": \"INV-1002\"}"}
+          },
+          {
+            "id": "call_fixture_b",
+            "type": "function",
+            "function": {"name": "get_payment_history", "arguments": "{\"invoice_id\": INV-1002}"}
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 812, "completion_tokens": 57, "total_tokens": 869}
+}

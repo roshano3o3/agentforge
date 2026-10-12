@@ -181,7 +181,7 @@ export default function NewRunForm() {
       </label>
       <label>
         Per-case timeout (s)
-        <input type="number" min="0.1" max="300" step="0.1" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
+        <input type="number" min="0.1" max="600" step="0.1" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
       </label>
       <label>
         Pass threshold

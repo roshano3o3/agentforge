@@ -13,12 +13,14 @@ import httpx
 
 
 class ApiError(Exception):
-    """A non-2xx API response, with the server's `detail` message."""
+    """A non-2xx API response, with the server's `detail` message. A
+    structured detail ({"message": ..., ...}) is kept whole in `data`."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, detail: str, data: Any = None) -> None:
         super().__init__(f"{status_code}: {detail}")
         self.status_code = status_code
         self.detail = detail
+        self.data = data
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -28,6 +30,8 @@ def _raise_for_status(response: httpx.Response) -> None:
         detail = response.json().get("detail", response.text)
     except ValueError:
         detail = response.text
+    if isinstance(detail, dict) and "message" in detail:
+        raise ApiError(response.status_code, str(detail["message"]), detail)
     raise ApiError(response.status_code, str(detail))
 
 
@@ -147,5 +151,46 @@ class AgentForgeClient:
             "/release-decisions",
             json={"candidate_run_id": candidate_run_id, "baseline": baseline, "policy": policy},
         )
+        _raise_for_status(resp)
+        return resp.json()
+
+    # -- failure replay ------------------------------------------------------------
+
+    def create_replay(self, result_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Creates a *pending* replay of one case result and queues it (HTTP 202);
+        poll `get_replay` until it's `completed` or `failed`."""
+        resp = self._client.post("/replay", json={"result_id": result_id, "overrides": overrides or {}})
+        _raise_for_status(resp)
+        return resp.json()
+
+    def get_replay(self, replay_id: str) -> dict[str, Any]:
+        resp = self._client.get(f"/replays/{replay_id}")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def list_replays(self, result_id: str) -> list[dict[str, Any]]:
+        resp = self._client.get(f"/results/{result_id}/replays")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def create_rescore(self, run_id: str, evaluators: list[str]) -> dict[str, Any]:
+        """Creates a *pending* re-score of a completed run (HTTP 202): its stored outputs scored again
+        with these evaluator versions, no adapter call. Poll `get_rescore`."""
+        resp = self._client.post(f"/runs/{run_id}/rescores", json={"evaluators": evaluators})
+        _raise_for_status(resp)
+        return resp.json()
+
+    def get_rescore(self, rescore_id: str) -> dict[str, Any]:
+        resp = self._client.get(f"/rescores/{rescore_id}")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def list_rescores(self, run_id: str) -> list[dict[str, Any]]:
+        resp = self._client.get(f"/runs/{run_id}/rescores")
+        _raise_for_status(resp)
+        return resp.json()
+
+    def get_replay_options(self, result_id: str) -> dict[str, Any]:
+        resp = self._client.get(f"/results/{result_id}/replay-options")
         _raise_for_status(resp)
         return resp.json()

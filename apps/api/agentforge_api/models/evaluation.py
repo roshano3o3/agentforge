@@ -64,6 +64,19 @@ class EvaluationRun(Base):
     status: Mapped[RunStatus] = mapped_column(SAEnum(RunStatus), default=RunStatus.pending, nullable=False)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     aggregates: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Recorded by the worker when it starts the run (agentforge_worker.provenance):
+    # what code and pricing it ran with. NULL for runs before migration e7c1a4b95d23.
+    code_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pricing_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The adapter's declared replay settings, as the worker loaded it
+    # (agentforge_sdk.replay.describe_declaration). NULL: not recorded.
+    replay_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Settings every case runs with, e.g. an LLM adapter's provider/model/prompt: passed to the adapter as
+    # `overrides`, checked by the worker against its replay declaration first. NULL: none.
+    adapter_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The worker stops the run once its estimated spend passes this (USD). NULL: no cap.
+    max_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -154,6 +167,9 @@ class AgentStep(Base):
     retrieved_doc_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     output: Mapped[str | None] = mapped_column(String, nullable=True)
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The span the agent reported for this step (a trace_spans.span_id of the
+    # same case), if it reported one. Never filled in by AgentForge.
+    span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     # `result` is the tool's return value, so the parent row is `result_row`.

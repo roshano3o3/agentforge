@@ -39,6 +39,13 @@ services:
     environment:
       AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
       AGENTFORGE_REDIS_URL: redis://redis:6379/0
+      # Tracing: spans are stored in Postgres unless AGENTFORGE_TRACING=off.
+      # OTLP export only when an endpoint is set, e.g. the jaeger profile below:
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile tracing up -d
+      AGENTFORGE_TRACING: ${AGENTFORGE_TRACING:-on}
+      # PII redaction of stored/exported spans; off only for local debugging.
+      AGENTFORGE_TRACE_REDACTION: ${AGENTFORGE_TRACE_REDACTION:-on}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -54,10 +61,23 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+      args:
+        # Set by scripts/docker-up.ps1, test.ps1 and test-ui.ps1 (scripts/git-sha.ps1).
+        AGENTFORGE_GIT_SHA: ${AGENTFORGE_GIT_SHA:-}
     restart: unless-stopped
     environment:
       AGENTFORGE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD:-agentforge}@postgres:5432/${POSTGRES_DB:-agentforge}
       AGENTFORGE_REDIS_URL: redis://redis:6379/0
+      AGENTFORGE_TRACING: ${AGENTFORGE_TRACING:-on}
+      # PII redaction of stored/exported spans; off only for local debugging.
+      AGENTFORGE_TRACE_REDACTION: ${AGENTFORGE_TRACE_REDACTION:-on}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # The invoice agent's LLM planner (answer_llm, `agentforge compare --models`). Keys come only from
+      # the git-ignored .env (see .env.example); empty means that provider isn't configured. Nothing in
+      # the scripted examples, the tests or CI uses them.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     # Lets HTTP adapters reach a service on the host at host.docker.internal
     # (automatic on Docker Desktop; this line makes it work on Linux too).
     extra_hosts:
@@ -69,6 +89,20 @@ services:
         condition: service_healthy
       api:
         condition: service_started
+
+  # Optional trace viewer, off by default: `docker compose --profile tracing up -d`
+  # with OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 so the API and worker
+  # export to it (the spans are stored in Postgres either way). UI on
+  # http://127.0.0.1:16686. In-memory storage: traces vanish when it stops.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["tracing"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686" # UI
+      - "127.0.0.1:4318:4318" # OTLP/HTTP, for exporters on the host
 
 volumes:
   agentforge_postgres_data:

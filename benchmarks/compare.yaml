@@ -1,0 +1,23 @@
+# The default model comparison: `agentforge compare --plan benchmarks/compare.yaml --max-cost 5`.
+#
+# Models run in this order, each with its own datasets, repeats and per-case timeout
+# (cli/agentforge_cli/benchmark.py: load_plan_file). Only these models are compared by
+# default; config/pricing.yaml still prices others (gpt-5.4, gpt-5.4-mini, ...), which
+# can be run with `--models`.
+#
+# Sonnet runs last: if the measured spend runs ahead of the estimate, the --max-cost cap
+# stops further runs, so its last repeats are the first thing cut.
+datasets: [invoice-agent, invoice-agent-safety]
+repeats: 3
+models:
+  # Reference row: the scripted v1 planner. Deterministic, no model, $0 -- one run is enough.
+  - spec: scripted:v1
+    repeats: 1
+  # Local, CPU-only on the benchmark machine (~8 tokens/s): the trajectory dataset once.
+  # 600 s is the API's per-case limit; a case still running then is recorded as a timeout.
+  - spec: ollama:llama3.1:8b
+    datasets: [invoice-agent]
+    repeats: 1
+    timeout_seconds: 600
+  - spec: anthropic:claude-haiku-4-5
+  - spec: anthropic:claude-sonnet-5-5

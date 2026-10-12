@@ -66,6 +66,9 @@ function ResultRow({ result }: { result: EvaluationResult }) {
     <tr data-case-key={result.case_key}>
       <td style={{ minWidth: 150 }}>
         <div className="mono">{result.case_key}</div>
+        <Link href={`/traces/${result.id}`} className="trace-link">
+          Open trace →
+        </Link>
         <div className="meta-line">{result.input}</div>
       </td>
       <td style={{ maxWidth: 280 }}>

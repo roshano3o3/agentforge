@@ -105,7 +105,8 @@ function StepItem({ step, stepFlags }: { step: AgentStep; stepFlags: Flag[] }) {
 
 /** One case's trajectory: every step the agent reported, in order, with the
  * steps a failed evaluator blamed highlighted and its reason beside them. */
-export default function Trajectory({ result }: { result: EvaluationResult }) {
+/** `defaultOpen`: start expanded (the Safety page's drill-down is there to show the blamed step). */
+export default function Trajectory({ result, defaultOpen = false }: { result: EvaluationResult; defaultOpen?: boolean }) {
   const { byStep, unplaced } = flags(result.metrics);
   const flaggedCount = byStep.size;
 
@@ -122,7 +123,7 @@ export default function Trajectory({ result }: { result: EvaluationResult }) {
   }
   return (
     // Collapsed by default; the summary already says how many steps were flagged.
-    <details className="trajectory" data-trajectory-for={result.case_key}>
+    <details className="trajectory" data-trajectory-for={result.case_key} open={defaultOpen}>
       <summary>
         Trajectory · {result.steps.length} step{result.steps.length === 1 ? "" : "s"}
         {flaggedCount > 0 ? (

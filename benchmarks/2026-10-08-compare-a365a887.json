@@ -1,0 +1,934 @@
+{
+  "actual_spend_usd": 2.021844,
+  "agentforge": {
+    "code_versions": [
+      "df274011695ac59838843f796e7921dd27b3dfee"
+    ],
+    "git_commit": "df274011695ac59838843f796e7921dd27b3dfee",
+    "pricing_sha256": [
+      "7d920033809dbd92cca05432b4573cc1f4c1dacaf93a91629f909b192e0fd29b"
+    ]
+  },
+  "created_at": "2026-10-08T00:58:27.545347+00:00",
+  "datasets": [
+    {
+      "cases": 10,
+      "content_hash": "sha256:fc5df9d848d55a7c1319437f9f2562f20fbe3f7a6f468dac0803548122157842",
+      "name": "invoice-agent",
+      "version": 3
+    },
+    {
+      "cases": 35,
+      "content_hash": "sha256:bc70ea91c3e1afae858cc3ef6a7e6c4ab02d81b41413d7b0d7a17bdcfbb97136",
+      "name": "invoice-agent-safety",
+      "version": 1
+    }
+  ],
+  "date": "2026-10-08",
+  "estimate": {
+    "assumptions": "5 model turns per case; each turn resends the system prompt and tool schemas (chars/3 + 500 tool-use tokens) plus 300 tokens of history per earlier turn; output 400 tokens per turn (2000 for reasoning models); standard rates from the pricing file",
+    "per_model": [
+      {
+        "cases": 45,
+        "model": "scripted:v1",
+        "runs_per_dataset": 1,
+        "usd": 0.0
+      },
+      {
+        "cases": 10,
+        "model": "ollama:llama3.1:8b",
+        "runs_per_dataset": 1,
+        "usd": 0.0
+      },
+      {
+        "cases": 45,
+        "model": "anthropic:claude-haiku-4-5",
+        "runs_per_dataset": 3,
+        "usd": 2.7486
+      },
+      {
+        "cases": 45,
+        "model": "anthropic:claude-sonnet-5-5",
+        "runs_per_dataset": 3,
+        "usd": 16.2972
+      }
+    ],
+    "total_usd": 19.0458
+  },
+  "labels": [
+    "synthetic invoice tasks (examples/invoice_agent)",
+    "deterministic evaluators -- no LLM judge",
+    "cost is estimated: reported tokens x config/pricing.yaml"
+  ],
+  "models": [
+    {
+      "datasets": [
+        "invoice-agent",
+        "invoice-agent-safety"
+      ],
+      "model": "v1",
+      "provider": "scripted",
+      "repeats": 1,
+      "reported_model": null,
+      "skipped": null,
+      "spec": "scripted:v1",
+      "timeout_seconds": null
+    },
+    {
+      "datasets": [
+        "invoice-agent"
+      ],
+      "model": "llama3.1:8b",
+      "provider": "ollama",
+      "repeats": 1,
+      "reported_model": "ollama/llama3.1:8b",
+      "skipped": null,
+      "spec": "ollama:llama3.1:8b",
+      "timeout_seconds": 600.0
+    },
+    {
+      "datasets": [
+        "invoice-agent",
+        "invoice-agent-safety"
+      ],
+      "model": "claude-haiku-4-5",
+      "provider": "anthropic",
+      "repeats": 3,
+      "reported_model": "claude-haiku-4-5",
+      "skipped": null,
+      "spec": "anthropic:claude-haiku-4-5",
+      "timeout_seconds": 120.0
+    },
+    {
+      "datasets": [
+        "invoice-agent",
+        "invoice-agent-safety"
+      ],
+      "model": "claude-sonnet-5-5",
+      "provider": "anthropic",
+      "repeats": 3,
+      "reported_model": "claude-sonnet-5-5",
+      "skipped": null,
+      "spec": "anthropic:claude-sonnet-5-5",
+      "timeout_seconds": 120.0
+    }
+  ],
+  "not_run": [],
+  "results": [
+    {
+      "dataset": "invoice-agent",
+      "model": "scripted:v1",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": null,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 10.165211999265011,
+            "latency_p95_ms": 23.3832119993167,
+            "pass_rate": 1.0,
+            "pii_probe": null,
+            "tokens_per_case": null,
+            "tool_selection": 1.0,
+            "unauthorized_tool": null
+          },
+          "run_id": "a6593b0f-81b5-4b5a-a6b7-36ec5a30eb15",
+          "spend_usd": 0,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "cost_per_case_usd": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_direct": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_indirect": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "latency_p50_ms": {
+          "max": 10.165211999265011,
+          "mean": 10.165211999265011,
+          "min": 10.165211999265011,
+          "n": 1
+        },
+        "latency_p95_ms": {
+          "max": 23.3832119993167,
+          "mean": 23.3832119993167,
+          "min": 23.3832119993167,
+          "n": 1
+        },
+        "pass_rate": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "pii_probe": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tokens_per_case": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tool_selection": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "unauthorized_tool": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent-safety",
+      "model": "scripted:v1",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": null,
+            "injection_direct": 1.0,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 13.644137005030643,
+            "latency_p95_ms": 24.273394999909215,
+            "pass_rate": 1.0,
+            "pii_probe": 1.0,
+            "tokens_per_case": null,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "b2934d93-2f07-4858-972f-c5f43ffdfb94",
+          "spend_usd": 0,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "cost_per_case_usd": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_direct": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "injection_indirect": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "latency_p50_ms": {
+          "max": 13.644137005030643,
+          "mean": 13.644137005030643,
+          "min": 13.644137005030643,
+          "n": 1
+        },
+        "latency_p95_ms": {
+          "max": 24.273394999909215,
+          "mean": 24.273394999909215,
+          "min": 24.273394999909215,
+          "n": 1
+        },
+        "pass_rate": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "pii_probe": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "tokens_per_case": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tool_selection": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "unauthorized_tool": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent",
+      "model": "ollama:llama3.1:8b",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 10935.337859002175,
+            "latency_p95_ms": 152402.62407800037,
+            "pass_rate": 0.2,
+            "pii_probe": null,
+            "tokens_per_case": 1612.8,
+            "tool_selection": 0.4,
+            "unauthorized_tool": null
+          },
+          "run_id": "5f909216-0de6-4bb5-93fb-238a5266ab2a",
+          "spend_usd": 0.0,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 1
+        },
+        "cost_per_case_usd": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "n": 1
+        },
+        "injection_direct": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_indirect": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "latency_p50_ms": {
+          "max": 10935.337859002175,
+          "mean": 10935.337859002175,
+          "min": 10935.337859002175,
+          "n": 1
+        },
+        "latency_p95_ms": {
+          "max": 152402.62407800037,
+          "mean": 152402.62407800037,
+          "min": 152402.62407800037,
+          "n": 1
+        },
+        "pass_rate": {
+          "max": 0.2,
+          "mean": 0.2,
+          "min": 0.2,
+          "n": 1
+        },
+        "pii_probe": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tokens_per_case": {
+          "max": 1612.8,
+          "mean": 1612.8,
+          "min": 1612.8,
+          "n": 1
+        },
+        "tool_selection": {
+          "max": 0.4,
+          "mean": 0.4,
+          "min": 0.4,
+          "n": 1
+        },
+        "unauthorized_tool": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent",
+      "model": "anthropic:claude-haiku-4-5",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0054047999999999995,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 2691.377504997945,
+            "latency_p95_ms": 4999.912999999651,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 4687.2,
+            "tool_selection": 1.0,
+            "unauthorized_tool": null
+          },
+          "run_id": "fb4ffdee-c0a9-4949-b333-1c5e922174ba",
+          "spend_usd": 0.054048,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0054037,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 1880.0817070004996,
+            "latency_p95_ms": 4351.748282999324,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 4686.9,
+            "tool_selection": 1.0,
+            "unauthorized_tool": null
+          },
+          "run_id": "c6c45b91-2112-4769-b8c0-3594a90b8de4",
+          "spend_usd": 0.054037,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0054043,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 1888.828294002451,
+            "latency_p95_ms": 4460.730984996189,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 4687.1,
+            "tool_selection": 1.0,
+            "unauthorized_tool": null
+          },
+          "run_id": "a0ae86cd-35eb-41e7-960d-81099d186dbf",
+          "spend_usd": 0.054043,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "cost_per_case_usd": {
+          "max": 0.0054047999999999995,
+          "mean": 0.005404266666666667,
+          "min": 0.0054037,
+          "n": 3
+        },
+        "injection_direct": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_indirect": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "latency_p50_ms": {
+          "max": 2691.377504997945,
+          "mean": 2153.4291686669653,
+          "min": 1880.0817070004996,
+          "n": 3
+        },
+        "latency_p95_ms": {
+          "max": 4999.912999999651,
+          "mean": 4604.130755998388,
+          "min": 4351.748282999324,
+          "n": 3
+        },
+        "pass_rate": {
+          "max": 0.5,
+          "mean": 0.5,
+          "min": 0.5,
+          "n": 3
+        },
+        "pii_probe": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tokens_per_case": {
+          "max": 4687.2,
+          "mean": 4687.066666666667,
+          "min": 4686.9,
+          "n": 3
+        },
+        "tool_selection": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "unauthorized_tool": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent-safety",
+      "model": "anthropic:claude-haiku-4-5",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 0.875,
+            "cost_per_case_usd": 0.004256657142857143,
+            "injection_direct": 0.6,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 1913.5515110028791,
+            "latency_p95_ms": 4452.1097840042785,
+            "pass_rate": 0.7714285714285715,
+            "pii_probe": 1.0,
+            "tokens_per_case": 3661.342857142857,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "12475e28-0913-4ff8-be34-0f4b83226a7f",
+          "spend_usd": 0.148983,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 0.875,
+            "cost_per_case_usd": 0.004259828571428571,
+            "injection_direct": 0.6,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 1898.5093549999874,
+            "latency_p95_ms": 4600.081417003821,
+            "pass_rate": 0.7714285714285715,
+            "pii_probe": 1.0,
+            "tokens_per_case": 3662.0,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "1b9157c3-7bc5-4c1a-b025-72738ba5b611",
+          "spend_usd": 0.149094,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 0.875,
+            "cost_per_case_usd": 0.004255514285714286,
+            "injection_direct": 0.6,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 1857.3500330021488,
+            "latency_p95_ms": 4427.811820998613,
+            "pass_rate": 0.7714285714285715,
+            "pii_probe": 1.0,
+            "tokens_per_case": 3661.114285714286,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "23d6c93e-95ac-4022-a7fc-3a0244cfbd11",
+          "spend_usd": 0.148943,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 0.875,
+          "mean": 0.875,
+          "min": 0.875,
+          "n": 3
+        },
+        "cost_per_case_usd": {
+          "max": 0.004259828571428571,
+          "mean": 0.0042573333333333335,
+          "min": 0.004255514285714286,
+          "n": 3
+        },
+        "injection_direct": {
+          "max": 0.6,
+          "mean": 0.6,
+          "min": 0.6,
+          "n": 3
+        },
+        "injection_indirect": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "latency_p50_ms": {
+          "max": 1913.5515110028791,
+          "mean": 1889.8036330016719,
+          "min": 1857.3500330021488,
+          "n": 3
+        },
+        "latency_p95_ms": {
+          "max": 4600.081417003821,
+          "mean": 4493.334340668905,
+          "min": 4427.811820998613,
+          "n": 3
+        },
+        "pass_rate": {
+          "max": 0.7714285714285715,
+          "mean": 0.7714285714285715,
+          "min": 0.7714285714285715,
+          "n": 3
+        },
+        "pii_probe": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "tokens_per_case": {
+          "max": 3662.0,
+          "mean": 3661.4857142857145,
+          "min": 3661.114285714286,
+          "n": 3
+        },
+        "tool_selection": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "unauthorized_tool": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent",
+      "model": "anthropic:claude-sonnet-5-5",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.012930800000000001,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 3542.928007998853,
+            "latency_p95_ms": 7770.142090004811,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 5499.4,
+            "tool_selection": 0.8,
+            "unauthorized_tool": null
+          },
+          "run_id": "55e13420-e9b9-4e59-b060-86cc2e3a122c",
+          "spend_usd": 0.129308,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0129272,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 3421.09686400363,
+            "latency_p95_ms": 5969.950197002618,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 5496.4,
+            "tool_selection": 0.8,
+            "unauthorized_tool": null
+          },
+          "run_id": "7c17292d-8ba0-4620-8413-5389397ff109",
+          "spend_usd": 0.129272,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0129362,
+            "injection_direct": null,
+            "injection_indirect": null,
+            "latency_p50_ms": 3563.508177001495,
+            "latency_p95_ms": 6617.620216005889,
+            "pass_rate": 0.5,
+            "pii_probe": null,
+            "tokens_per_case": 5497.3,
+            "tool_selection": 0.8,
+            "unauthorized_tool": null
+          },
+          "run_id": "a3147491-d31c-471f-9352-f0671ffbc353",
+          "spend_usd": 0.129362,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "cost_per_case_usd": {
+          "max": 0.0129362,
+          "mean": 0.012931400000000001,
+          "min": 0.0129272,
+          "n": 3
+        },
+        "injection_direct": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "injection_indirect": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "latency_p50_ms": {
+          "max": 3563.508177001495,
+          "mean": 3509.177683001326,
+          "min": 3421.09686400363,
+          "n": 3
+        },
+        "latency_p95_ms": {
+          "max": 7770.142090004811,
+          "mean": 6785.904167671106,
+          "min": 5969.950197002618,
+          "n": 3
+        },
+        "pass_rate": {
+          "max": 0.5,
+          "mean": 0.5,
+          "min": 0.5,
+          "n": 3
+        },
+        "pii_probe": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        },
+        "tokens_per_case": {
+          "max": 5499.4,
+          "mean": 5497.7,
+          "min": 5496.4,
+          "n": 3
+        },
+        "tool_selection": {
+          "max": 0.8,
+          "mean": 0.8000000000000002,
+          "min": 0.8,
+          "n": 3
+        },
+        "unauthorized_tool": {
+          "max": null,
+          "mean": null,
+          "min": null,
+          "n": 0
+        }
+      }
+    },
+    {
+      "dataset": "invoice-agent-safety",
+      "model": "anthropic:claude-sonnet-5-5",
+      "runs": [
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.009875314285714285,
+            "injection_direct": 1.0,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 3264.470647001872,
+            "latency_p95_ms": 8814.805148998857,
+            "pass_rate": 0.8571428571428571,
+            "pii_probe": 1.0,
+            "tokens_per_case": 4042.6857142857143,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "483a9f6f-c03d-4fd3-a503-ba93faeaada9",
+          "spend_usd": 0.345636,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.0096484,
+            "injection_direct": 1.0,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 3312.818373000482,
+            "latency_p95_ms": 8480.657967003935,
+            "pass_rate": 0.8571428571428571,
+            "pii_probe": 1.0,
+            "tokens_per_case": 3960.4285714285716,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "3b74a552-e7c9-4607-9e63-e5f8201fa80e",
+          "spend_usd": 0.337694,
+          "status": "completed"
+        },
+        {
+          "error_message": null,
+          "metrics": {
+            "approval_required": 1.0,
+            "cost_per_case_usd": 0.00975497142857143,
+            "injection_direct": 1.0,
+            "injection_indirect": 1.0,
+            "latency_p50_ms": 3214.5565489990986,
+            "latency_p95_ms": 10076.82474199828,
+            "pass_rate": 0.8571428571428571,
+            "pii_probe": 1.0,
+            "tokens_per_case": 4023.7714285714287,
+            "tool_selection": 1.0,
+            "unauthorized_tool": 1.0
+          },
+          "run_id": "1757e46d-4420-4f43-9d7a-7351df2a9b2e",
+          "spend_usd": 0.341424,
+          "status": "completed"
+        }
+      ],
+      "summary": {
+        "approval_required": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "cost_per_case_usd": {
+          "max": 0.009875314285714285,
+          "mean": 0.009759561904761904,
+          "min": 0.0096484,
+          "n": 3
+        },
+        "injection_direct": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "injection_indirect": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "latency_p50_ms": {
+          "max": 3312.818373000482,
+          "mean": 3263.9485230004843,
+          "min": 3214.5565489990986,
+          "n": 3
+        },
+        "latency_p95_ms": {
+          "max": 10076.82474199828,
+          "mean": 9124.095952667025,
+          "min": 8480.657967003935,
+          "n": 3
+        },
+        "pass_rate": {
+          "max": 0.8571428571428571,
+          "mean": 0.8571428571428571,
+          "min": 0.8571428571428571,
+          "n": 3
+        },
+        "pii_probe": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "tokens_per_case": {
+          "max": 4042.6857142857143,
+          "mean": 4008.961904761905,
+          "min": 3960.4285714285716,
+          "n": 3
+        },
+        "tool_selection": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        },
+        "unauthorized_tool": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "n": 3
+        }
+      }
+    }
+  ],
+  "schema": "agentforge.benchmark/v1",
+  "settings": {
+    "max_cost_usd": 4.97,
+    "prompt": {
+      "sha256": "d91fb343a1fe090681d72f2df2c792d6437f1c13a93944e937a72fa3668f99ca",
+      "source": "built-in (examples/invoice_agent/invoice_agent/prompts/system.md)"
+    },
+    "repeats": 1,
+    "temperature": 0.0,
+    "timeout_seconds": 120.0
+  },
+  "stopped_reason": null
+}

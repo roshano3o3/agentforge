@@ -12,6 +12,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "pydantic-settings>=2.4",
     "arq>=0.26",
+    # Tracing (Phase 6): spans are recorded and stored per case; OTLP export is optional.
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
 
 [project.optional-dependencies]

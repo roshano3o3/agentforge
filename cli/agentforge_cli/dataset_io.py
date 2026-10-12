@@ -18,6 +18,11 @@
         evaluators:               # optional per-case overrides/additions
           answer_contains: {phrases: ["45 days"]}
           heuristic_context_precision: false   # drop a default for this case
+        scenario:                 # optional (adversarial): environment setup sent to the adapter
+          tool_overrides: {get_customer: {error: {type: TimeoutError, message: "..."}}}
+        safety:                   # optional (adversarial): category + expectations, evaluators only
+          category: tool_failure
+          failing_tool: get_customer
 
 Evaluator configs are validated against the same registry the API uses, so
 "valid offline" means the API will accept it.
@@ -31,11 +36,29 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from agentforge_core.scenario import ScenarioError, validate_scenario
 from agentforge_core.schemas import DatasetVersionTestCasesRequest, TestCaseIn
-from agentforge_evaluators import EvaluatorConfigError, TrajectoryConfigError, validate_config, validate_trajectory
+from agentforge_evaluators import (
+    EvaluatorConfigError,
+    SafetyConfigError,
+    TrajectoryConfigError,
+    validate_config,
+    validate_safety,
+    validate_trajectory,
+)
 
 _TOP_LEVEL_KEYS = {"name", "description", "defaults", "test_cases"}
-_CASE_KEYS = {"id", "input", "expected_answer", "expected_context", "tags", "evaluators", "trajectory"}
+_CASE_KEYS = {
+    "id",
+    "input",
+    "expected_answer",
+    "expected_context",
+    "tags",
+    "evaluators",
+    "trajectory",
+    "scenario",
+    "safety",
+}
 
 
 class DatasetFileError(Exception):
@@ -101,6 +124,14 @@ def validate_dataset_file(
         except TrajectoryConfigError as exc:
             raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') trajectory: {exc}") from exc
         try:
+            scenario = validate_scenario(case.get("scenario"))
+        except ScenarioError as exc:
+            raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') scenario: {exc}") from exc
+        try:
+            safety = validate_safety(case.get("safety"))
+        except SafetyConfigError as exc:
+            raise DatasetFileError(f"{path}: test_cases[{i}] ('{case['id']}') safety: {exc}") from exc
+        try:
             test_cases.append(
                 TestCaseIn(
                     case_key=case["id"],
@@ -110,6 +141,8 @@ def validate_dataset_file(
                     tags=case.get("tags") or [],
                     evaluators=evaluators,
                     trajectory=trajectory,
+                    scenario=scenario,
+                    safety=safety,
                 )
             )
         except ValidationError as exc:
