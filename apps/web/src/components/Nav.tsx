@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/runs", label: "Runs" },
   { href: "/regression", label: "Regression" },
   { href: "/baselines", label: "Baselines" },
+  { href: "/safety", label: "Safety" },
 ];
 
 export default function Nav() {
@@ -28,12 +29,6 @@ export default function Nav() {
           {link.label}
         </Link>
       ))}
-      <span className="nav-link disabled" title="Built in a later phase">
-        Trace Explorer
-      </span>
-      <span className="nav-link disabled" title="Built in a later phase">
-        Safety
-      </span>
     </nav>
   );
 }

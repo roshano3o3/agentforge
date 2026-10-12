@@ -7,6 +7,7 @@ SQLAlchemy or any other server-side machinery -- it is pure data contracts.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from enum import Enum
@@ -105,6 +106,14 @@ EvaluatorConfigIn = dict[str, Any]
 # A test case's trajectory expectations; see
 # packages/evaluators/agentforge_evaluators/trajectory.py for the keys.
 TrajectoryIn = dict[str, Any]
+# How the application's environment is set up for one case (mock tool
+# failures, injected tool output, the session user); the only part of a case
+# besides its input that the adapter receives. See agentforge_core.scenario.
+ScenarioIn = dict[str, Any]
+# Safety-test metadata and expectations (attack category, source case,
+# forbidden actions, secrets, ...). Evaluators only; never sent to the
+# adapter. See packages/evaluators/agentforge_evaluators/safety.py.
+SafetyIn = dict[str, Any]
 
 
 class TestCaseIn(BaseModel):
@@ -123,6 +132,10 @@ class TestCaseIn(BaseModel):
     # expected_sequence, ...). Validated by the API and the CLI against
     # agentforge_evaluators.validate_trajectory.
     trajectory: TrajectoryIn | None = None
+    # Adversarial cases (Phase 5): the environment setup sent to the adapter,
+    # and the safety block only evaluators read. Both validated by the API and the CLI.
+    scenario: ScenarioIn | None = None
+    safety: SafetyIn | None = None
 
     @field_validator("expected_context", "tags")
     @classmethod
@@ -168,6 +181,8 @@ class TestCaseOut(BaseModel):
     tags: list[str]
     evaluators: EvaluatorConfigIn | None
     trajectory: TrajectoryIn | None
+    scenario: ScenarioIn | None = None
+    safety: SafetyIn | None = None
     # Read-only legacy fields from Phase 2 datasets (published before per-case
     # config existed). The worker still honors them for those versions; new
     # data can't set them -- use `evaluators` instead.
@@ -185,6 +200,9 @@ class DatasetVersionOut(BaseModel):
     created_at: datetime
     published_at: datetime | None
     default_evaluators: EvaluatorConfigIn | None
+    # sha256 of the version's content (agentforge_core.hashing); set only once
+    # published, since a draft's content can still change.
+    content_hash: str | None = None
     test_cases: list[TestCaseOut]
 
     model_config = {"from_attributes": True}
@@ -224,8 +242,13 @@ class EvaluationRunCreate(BaseModel):
     environment: str = Field(default="local", max_length=50)
     threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     max_latency_ms: float | None = Field(default=None, gt=0)
-    timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    timeout_seconds: float = Field(default=10.0, gt=0, le=600)
     git_commit_sha: str | None = Field(default=None, max_length=40)
+    # Settings every case runs with (python adapters that declare them, agentforge_sdk.replay):
+    # e.g. an LLM adapter's provider, model and prompt. The worker validates them before any case.
+    adapter_settings: dict[str, Any] | None = None
+    # Stop the run once its estimated spend (tokens x config/pricing.yaml) passes this, in USD.
+    max_cost_usd: float | None = Field(default=None, gt=0)
 
 
 class MetricScoreOut(BaseModel):
@@ -256,6 +279,8 @@ class AgentStepOut(BaseModel):
     retrieved_doc_ids: list[str]
     output: str | None
     duration_ms: float | None
+    # The span the agent reported for this step (see GET /traces/{result_id}).
+    span_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -283,6 +308,8 @@ class EvaluationResultOut(BaseModel):
     # the steps the agent reported, in order. Empty for non-agent cases.
     trajectory: TrajectoryIn | None = None
     steps: list[AgentStepOut] = Field(default_factory=list)
+    # The case's safety block (attack category, source case, ...), if any.
+    safety: SafetyIn | None = None
 
 
 class RunProgress(BaseModel):
@@ -312,6 +339,15 @@ class EvaluationRunSummaryOut(BaseModel):
     aggregates: dict | None
 
 
+class ProvenanceOut(BaseModel):
+    """What a run or replay executed with (agentforge_worker.provenance).
+    All None: not recorded (before it ran, or before migration e7c1a4b95d23)."""
+
+    code_version: str | None = None
+    code_sha256: str | None = None
+    pricing_sha256: str | None = None
+
+
 class EvaluationRunOut(EvaluationRunSummaryOut):
     application_id: str
     application_version_id: str
@@ -323,6 +359,12 @@ class EvaluationRunOut(EvaluationRunSummaryOut):
     max_latency_ms: float | None
     timeout_seconds: float | None
     git_commit_sha: str | None
+    # Content hash of the (published, frozen) dataset version this run used.
+    dataset_content_hash: str | None = None
+    # What the worker ran it with (code version, source and pricing hashes).
+    provenance: ProvenanceOut = Field(default_factory=ProvenanceOut)
+    adapter_settings: dict[str, Any] | None = None
+    max_cost_usd: float | None = None
     results: list[EvaluationResultOut] = Field(default_factory=list)
 
 
@@ -437,6 +479,291 @@ class RegressionOut(BaseModel):
     # pass_rate, error_rate, p50/p95_latency_ms, estimated_cost_usd (ESTIMATED).
     summary: dict[str, MetricDeltaOut]
     metrics: list[EvaluatorDeltaOut]
+    # Pass rate per attack category (adversarial datasets only).
+    safety: dict[str, MetricDeltaOut] = Field(default_factory=dict)
     # newly_failing / fixed / still_failing / still_passing
     cases: dict[str, list[CaseChangeOut]]
     case_counts: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Traces (Phase 6): stored OpenTelemetry spans, as a tree per evaluated case.
+# ---------------------------------------------------------------------------
+
+
+class TraceSpanOut(BaseModel):
+    span_id: str
+    parent_span_id: str | None
+    name: str
+    kind: str
+    # The recording process (agentforge-api / agentforge-worker); the
+    # `agentforge.component` attribute says api / worker / agent.
+    service: str
+    start_time: datetime
+    end_time: datetime
+    duration_ms: float
+    attributes: dict[str, Any]
+    status_code: Literal["UNSET", "OK", "ERROR"]
+    status_message: str | None
+    events: list[dict[str, Any]]
+    # The agent step (agent_steps.step_index) that reported this span, if any.
+    step_index: int | None = None
+    children: list[TraceSpanOut] = Field(default_factory=list)
+
+
+class TraceOut(BaseModel):
+    result_id: str  # the case's result id in its run (the path parameter)
+    case_key: str
+    run_id: str
+    trace_id: str
+    span_count: int
+    spans: list[TraceSpanOut]  # roots (normally one: agentforge.run.create)
+
+
+# -- failure replay -------------------------------------------------------------------
+
+_OVERRIDE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_OVERRIDES_CHARS = 200_000
+
+
+class ReplayCreate(BaseModel):
+    """Re-run one evaluated case. `overrides` are checked here only for shape
+    (names, JSON, size); what they may contain is up to the adapter, which
+    declares its settings -- the worker validates against that declaration and
+    rejects the replay with a message if they don't match."""
+
+    result_id: str = Field(min_length=1, max_length=36)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("overrides")
+    @classmethod
+    def overrides_shape(cls, value: dict[str, Any]) -> dict[str, Any]:
+        bad = [k for k in value if not _OVERRIDE_KEY.match(k)]
+        if bad:
+            raise ValueError(f"override names must be identifiers (letters, digits, _): {bad}")
+        try:
+            size = len(json.dumps(value, allow_nan=False))
+        except ValueError as exc:
+            raise ValueError(f"overrides must be JSON: {exc}") from exc
+        if size > MAX_OVERRIDES_CHARS:
+            raise ValueError(f"overrides are {size} characters of JSON; at most {MAX_OVERRIDES_CHARS} allowed")
+        return value
+
+
+ReplayStatus = Literal["pending", "running", "completed", "failed"]
+
+
+class ReplaySummaryOut(BaseModel):
+    id: str
+    original_result_id: str
+    original_run_id: str
+    case_key: str
+    overrides: dict[str, Any]
+    status: ReplayStatus
+    error_message: str | None
+    result_status: ResultStatus | None
+    passed: bool | None
+    original_passed: bool | None
+    # Completed replays only: every step, tool call, answer and evaluator
+    # verdict matched the original (see ReplayDiffOut.identical).
+    identical: bool | None = None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class MetricBrief(BaseModel):
+    evaluator_version: str
+    passed: bool | None
+    score: float | None
+    value: float | None
+    unit: str | None
+    reason: str
+
+
+class EvaluatorChange(BaseModel):
+    evaluator_name: str
+    # unchanged | fixed (fail -> pass) | broken (pass -> fail) | changed
+    # (score/value/reason/applicability) | added | removed
+    change: Literal["unchanged", "fixed", "broken", "changed", "added", "removed"]
+    before: MetricBrief | None
+    after: MetricBrief | None
+
+
+class StepBrief(BaseModel):
+    step_index: int
+    kind: str
+    name: str
+    args: dict
+    result: Any
+    error: str | None
+    output: str | None
+    retrieved_doc_ids: list[str]
+
+
+class StepChange(BaseModel):
+    # Steps are aligned by (kind, tool name) in order; an aligned pair is
+    # unchanged or changed (changed_fields lists what differs).
+    op: Literal["unchanged", "changed", "added", "removed"]
+    kind: str
+    name: str
+    before: StepBrief | None
+    after: StepBrief | None
+    changed_fields: list[str] = Field(default_factory=list)
+
+
+class TextSegment(BaseModel):
+    op: Literal["equal", "insert", "delete"]
+    text: str
+
+
+class AnswerDiff(BaseModel):
+    before: str | None
+    after: str | None
+    changed: bool
+    segments: list[TextSegment]  # word-level, in order
+
+
+class NumberChange(BaseModel):
+    before: float | None
+    after: float | None
+    delta: float | None  # after - before, when both are known
+
+
+class ReplayDiffOut(BaseModel):
+    """Original result vs replay. `identical` ignores what's measured rather
+    than produced -- latency (and the latency evaluator's measured value and
+    reason), step timings and span ids -- and compares everything else:
+    status, verdict, answer, retrieved docs, citations, tokens, every step
+    (kind, tool, args, result, error, output) and every evaluator's version,
+    verdict, score, value and reason."""
+
+    identical: bool
+    differences: list[str]
+    before_status: ResultStatus
+    after_status: ResultStatus
+    before_passed: bool | None
+    after_passed: bool | None
+    evaluators: list[EvaluatorChange]
+    trajectory: list[StepChange]
+    answer: AnswerDiff
+    latency_ms: NumberChange
+    input_tokens: NumberChange
+    output_tokens: NumberChange
+
+
+class ReplayProvenanceOut(BaseModel):
+    original: ProvenanceOut
+    replay: ProvenanceOut
+    # None when either side wasn't recorded.
+    same_code: bool | None
+    same_pricing: bool | None
+    warnings: list[str]
+
+
+class ReplaySettingOut(BaseModel):
+    """One setting an adapter accepts as a replay override (agentforge_sdk.replay.Setting)."""
+
+    name: str
+    kind: Literal["bool", "int", "float", "str", "choice", "text", "object"]
+    description: str = ""
+    choices: list[str] = Field(default_factory=list)
+    minimum: float | None = None
+    maximum: float | None = None
+    max_length: int | None = None
+    fields: list[ReplaySettingOut] = Field(default_factory=list)
+    default: Any = None
+
+
+class ReplayOptionsOut(BaseModel):
+    """What a replay of one result may override, as the worker recorded the
+    run's adapter declaring it. A replay without overrides is always possible."""
+
+    result_id: str
+    run_id: str
+    case_key: str
+    adapter_type: str | None
+    adapter_target: str | None
+    # False for runs that didn't record it (before migration e7c1a4b95d23):
+    # then only the worker can check overrides, when the replay runs.
+    recorded: bool
+    overrides_supported: bool
+    reason: str | None  # why overrides aren't supported, or why options aren't known
+    settings: list[ReplaySettingOut]
+    # The adapter also checks combinations of settings, which only the worker can run.
+    worker_checks: bool
+
+
+class ReplayOut(ReplaySummaryOut):
+    test_case_id: str
+    input: str
+    dataset_version_id: str
+    dataset_content_hash: str | None
+    adapter_type: str
+    adapter_target: str
+    evaluators: list[str]
+    labels: list[str]
+    output_answer: str | None
+    retrieved_doc_ids: list[str]
+    citations: list[str]
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str | None
+    latency_ms: float | None
+    error_type: str | None
+    case_error_message: str | None
+    metrics: list[MetricScoreOut]
+    steps: list[AgentStepOut]
+    trace_id: str | None
+    spans: list[TraceSpanOut]  # the replay's span tree (redacted like every stored span)
+    started_at: datetime | None
+    provenance: ReplayProvenanceOut
+    diff: ReplayDiffOut | None  # completed replays only
+
+
+# -- re-scores (Benchmarks part C) ------------------------------------------------------------------
+
+
+class RescoreCreate(BaseModel):
+    """Score a finished run's stored outputs again with other evaluator versions (no adapter call).
+    Each entry is `name@version` (or a bare name: its latest version); it replaces the run's pinned
+    version of that evaluator by name. Which evaluators apply to a case is still the dataset config's."""
+
+    evaluators: list[str] = Field(min_length=1, max_length=50)
+
+
+class RescoreResultOut(BaseModel):
+    original_result_id: str
+    case_key: str
+    status: ResultStatus  # the original result's status (an error/timeout stays one; it has no scores)
+    original_passed: bool | None
+    passed: bool
+    changed: bool  # the case verdict differs from the original's
+    metrics: list[MetricScoreOut]
+    # Copied from the original result, so a re-score can be summarized like a run.
+    latency_ms: float
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str | None
+    safety: SafetyIn | None = None
+
+
+class RescoreSummaryOut(BaseModel):
+    id: str
+    original_run_id: str
+    status: Literal["pending", "running", "completed", "failed"]
+    requested_evaluators: list[str]
+    evaluators: list[str]
+    replaced: dict[str, str]
+    error_message: str | None
+    aggregates: dict[str, Any] | None
+    original_aggregates: dict[str, Any] | None
+    newly_passing: int
+    newly_failing: int
+    code_version: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class RescoreOut(RescoreSummaryOut):
+    started_at: datetime | None
+    results: list[RescoreResultOut]

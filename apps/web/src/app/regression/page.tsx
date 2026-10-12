@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { ApiError, getRegression, listReleaseDecisions, listRuns } from "@/lib/api";
+import { ApiError, getRegression, getRun, listReleaseDecisions, listRuns } from "@/lib/api";
 import { formatMs, formatPct } from "@/lib/format";
 import type {
   CaseChange,
@@ -67,7 +67,16 @@ function runLabel(r: EvaluationRunSummary): string {
   );
 }
 
-function CaseList({ cls, cases }: { cls: (typeof CASE_CLASSES)[number]; cases: CaseChange[] }) {
+function CaseList({
+  cls,
+  cases,
+  traceIds,
+}: {
+  cls: (typeof CASE_CLASSES)[number];
+  cases: CaseChange[];
+  // case_key -> the candidate run's result id, for "trace" links.
+  traceIds: Record<string, string>;
+}) {
   return (
     <details className={`case-class case-${cls.tone}`} open={cls.key !== "still_passing"} data-case-class={cls.key}>
       <summary>
@@ -80,6 +89,14 @@ function CaseList({ cls, cases }: { cls: (typeof CASE_CLASSES)[number]; cases: C
           {cases.map((c) => (
             <li key={c.case_key}>
               <span className="mono">{c.case_key}</span>
+              {traceIds[c.case_key] && (
+                <>
+                  {" "}
+                  <Link href={`/traces/${traceIds[c.case_key]}`} className="trace-link">
+                    trace
+                  </Link>
+                </>
+              )}
               {c.tags.map((t) => (
                 <span key={t} className={`badge badge-label${t === "critical" ? " badge-critical" : ""}`}>
                   {t}
@@ -166,7 +183,9 @@ function RegressionView() {
   const [runsError, setRunsError] = useState("");
   // The comparison for one (baseline, candidate) pair; loading/idle are derived from it.
   const [result, setResult] = useState<
-    { key: string; report: RegressionReport; decisions: ReleaseDecision[] } | { key: string; error: string } | null
+    | { key: string; report: RegressionReport; decisions: ReleaseDecision[]; traceIds: Record<string, string> }
+    | { key: string; error: string }
+    | null
   >(null);
   const pairKey = baselineId && candidateId ? `${baselineId}|${candidateId}` : "";
 
@@ -185,8 +204,14 @@ function RegressionView() {
 
   useEffect(() => {
     if (!pairKey) return;
-    Promise.all([getRegression(baselineId, candidateId), listReleaseDecisions(candidateId)]).then(
-      ([report, decisions]) => setResult({ key: pairKey, report, decisions }),
+    Promise.all([getRegression(baselineId, candidateId), listReleaseDecisions(candidateId), getRun(candidateId)]).then(
+      ([report, decisions, candidate]) =>
+        setResult({
+          key: pairKey,
+          report,
+          decisions,
+          traceIds: Object.fromEntries(candidate.results.map((r) => [r.case_key, r.id])),
+        }),
       (err: unknown) =>
         setResult({ key: pairKey, error: err instanceof ApiError ? err.message : "Could not compare these runs." }),
     );
@@ -196,6 +221,7 @@ function RegressionView() {
   const state: LoadState = !pairKey ? "idle" : !current ? "loading" : "error" in current ? "error" : "ready";
   const report = current && "report" in current ? current.report : null;
   const decisions = current && "decisions" in current ? current.decisions : [];
+  const traceIds = current && "traceIds" in current ? current.traceIds : {};
   const error = current && "error" in current ? current.error : "";
 
   function select(which: "baseline" | "candidate", id: string) {
@@ -339,7 +365,7 @@ function RegressionView() {
           <h2 className="section-title">Cases</h2>
           <div className="case-classes">
             {CASE_CLASSES.map((cls) => (
-              <CaseList key={cls.key} cls={cls} cases={report.cases[cls.key]} />
+              <CaseList key={cls.key} cls={cls} cases={report.cases[cls.key]} traceIds={traceIds} />
             ))}
           </div>
 

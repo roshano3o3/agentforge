@@ -1,0 +1,58 @@
+# llama3.1:8b with a chat template that keeps the tool list on every turn.
+#
+# The stock Ollama template (`ollama show llama3.1:8b --template`) renders the tool definitions only inside
+# the LAST message when that message is from the user. In an agent loop the last message is a tool result
+# from turn 2 on, so the model stops seeing its tools after the first call (Benchmarks part B: the prompt
+# shrank from ~946 to ~570 tokens after turn 1). This template is the stock one with one change: the same
+# tool instructions and definitions are rendered in the system block whenever tools are sent, so every
+# turn has them. Weights and parameters are the base model's.
+#
+#   ollama create llama3.1-tools:8b -f examples/invoice_agent/ollama/llama3.1-tools.Modelfile
+#
+# The invoice agent reports it as ollama/llama3.1-tools:8b (config/pricing.yaml prices it at 0, like the base).
+FROM llama3.1:8b
+
+TEMPLATE """{{- if or .System .Tools }}<|start_header_id|>system<|end_header_id|>
+{{- if .System }}
+
+{{ .System }}
+{{- end }}
+{{- if .Tools }}
+
+Cutting Knowledge Date: December 2023
+
+When you receive a tool call response, use the output to format an answer to the orginal user question.
+
+You are a helpful assistant with tool calling capabilities.
+
+Given the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.
+
+Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}. Do not use variables.
+
+{{ range $.Tools }}
+{{- . }}
+{{ end }}
+{{- end }}<|eot_id|>
+{{- end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 }}
+{{- if eq .Role "user" }}<|start_header_id|>user<|end_header_id|>
+
+{{ .Content }}<|eot_id|>{{ if $last }}<|start_header_id|>assistant<|end_header_id|>
+
+{{ end }}
+{{- else if eq .Role "assistant" }}<|start_header_id|>assistant<|end_header_id|>
+{{- if .ToolCalls }}
+{{ range .ToolCalls }}
+{"name": "{{ .Function.Name }}", "parameters": {{ .Function.Arguments }}}{{ end }}
+{{- else }}
+
+{{ .Content }}
+{{- end }}{{ if not $last }}<|eot_id|>{{ end }}
+{{- else if eq .Role "tool" }}<|start_header_id|>ipython<|end_header_id|>
+
+{{ .Content }}<|eot_id|>{{ if $last }}<|start_header_id|>assistant<|end_header_id|>
+
+{{ end }}
+{{- end }}
+{{- end }}"""

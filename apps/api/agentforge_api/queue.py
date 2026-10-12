@@ -15,6 +15,8 @@ from arq.connections import ArqRedis, RedisSettings
 from agentforge_api.config import get_settings
 
 EXECUTE_RUN_JOB = "execute_run"
+EXECUTE_REPLAY_JOB = "execute_replay"
+EXECUTE_RESCORE_JOB = "execute_rescore"
 
 
 class QueueUnavailableError(RuntimeError):
@@ -22,7 +24,15 @@ class QueueUnavailableError(RuntimeError):
 
 
 class RunQueue(Protocol):
-    async def enqueue_run(self, run_id: str) -> None: ...
+    # trace_context: the W3C carrier ({"traceparent": ...}) of the API's
+    # run-creation span, so the worker's spans continue that trace.
+    async def enqueue_run(self, run_id: str, trace_context: dict[str, str] | None = None) -> None: ...
+
+    # Same, for one replay (Phase 7): the worker re-runs one case.
+    async def enqueue_replay(self, replay_id: str, trace_context: dict[str, str] | None = None) -> None: ...
+
+    # A re-score (Benchmarks part C): the worker scores a finished run's stored outputs again.
+    async def enqueue_rescore(self, rescore_id: str) -> None: ...
 
 
 class ArqRunQueue:
@@ -32,19 +42,28 @@ class ArqRunQueue:
         self._settings = dataclasses.replace(RedisSettings.from_dsn(redis_url), conn_retries=0, conn_timeout=2)
         self._pool: ArqRedis | None = None
 
-    async def enqueue_run(self, run_id: str) -> None:
+    async def enqueue_run(self, run_id: str, trace_context: dict[str, str] | None = None) -> None:
+        await self._enqueue(EXECUTE_RUN_JOB, "run", run_id, trace_context)
+
+    async def enqueue_replay(self, replay_id: str, trace_context: dict[str, str] | None = None) -> None:
+        await self._enqueue(EXECUTE_REPLAY_JOB, "replay", replay_id, trace_context)
+
+    async def enqueue_rescore(self, rescore_id: str) -> None:
+        await self._enqueue(EXECUTE_RESCORE_JOB, "rescore", rescore_id, None)
+
+    async def _enqueue(self, job_name: str, what: str, item_id: str, trace_context: dict[str, str] | None) -> None:
         try:
             if self._pool is None:
                 self._pool = await create_pool(self._settings, retry=0)
-            # _job_id = run id: enqueueing the same run twice is a no-op.
-            job = await self._pool.enqueue_job(EXECUTE_RUN_JOB, run_id, _job_id=f"run:{run_id}")
+            # _job_id = the item's id: enqueueing the same run (or replay) twice is a no-op.
+            job = await self._pool.enqueue_job(job_name, item_id, trace_context or None, _job_id=f"{what}:{item_id}")
         except Exception as exc:  # noqa: BLE001 - any Redis/connection failure
             self._pool = None
             raise QueueUnavailableError(
-                f"could not enqueue run on {self._settings.host}:{self._settings.port}: {exc}"
+                f"could not enqueue {what} on {self._settings.host}:{self._settings.port}: {exc}"
             ) from exc
         if job is None:
-            raise QueueUnavailableError(f"run {run_id} is already queued")
+            raise QueueUnavailableError(f"{what} {item_id} is already queued")
 
     async def close(self) -> None:
         if self._pool is not None:

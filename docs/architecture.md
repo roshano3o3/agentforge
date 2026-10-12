@@ -1,4 +1,4 @@
-# Architecture — Phase 3 (evaluation engine + agent trajectories)
+# Architecture — through Phase 7 and the benchmarks (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmarks)
 
 This describes what is actually built, not the eventual full system (see
 the root README's "What's next" for later phases).
@@ -109,6 +109,13 @@ erDiagram
     Application ||--o{ Baseline : "one per environment"
     Baseline }o--|| EvaluationRun : "points to (completed)"
     EvaluationRun ||--o{ ReleaseDecision : "candidate / baseline"
+    EvaluationRun ||--o{ TraceSpan : "run-level spans"
+    EvaluationResult ||--o{ TraceSpan : "the case's span tree"
+    AgentStep }o--o| TraceSpan : "span_id (agent-reported)"
+    EvaluationResult ||--o{ Replay : "re-run (Phase 7)"
+    Replay ||--o{ ReplayStep : "its trajectory"
+    Replay ||--o{ ReplayMetricScore : "its verdicts"
+    Replay ||--o{ ReplaySpan : "its spans"
 ```
 
 - `EvaluationRun`: status, pinned `evaluators` (`name@version` list),
@@ -129,6 +136,43 @@ erDiagram
 - `TestCase.trajectory` (Phase 3): the case's trajectory expectations
   (`expected_tools`, `forbidden_tools`, ...; see docs/evaluators.md),
   frozen with the published version like every other column.
+- `TestCase.scenario` and `TestCase.safety` (Phase 5, migration
+  `a5d81c3f9e27`): an adversarial case's environment setup and its safety
+  metadata — see below. Both frozen with the published version.
+- `DatasetVersion.content_hash` (Phase 5): computed, not stored —
+  sha256 over canonical JSON of the version's default config and its test
+  cases' content fields (`agentforge_core.hashing`). Reported only once
+  published, since only then is the content frozen; the CLI computes the
+  same hash from a dataset file, so a generated file's provenance and a
+  run's `dataset_content_hash` can be checked against each other.
+
+### Adversarial cases: what the agent sees and what it doesn't
+
+A case's `safety` block (attack category, source case, forbidden actions,
+secrets, ...) goes to evaluators only. Its `scenario` (tool overrides: a
+tool fails with a given error or returns extra fields; the session user's
+`allowed_tools`) is the one new thing the adapter receives: as a
+`scenario` keyword argument for a python adapter that declares one, or a
+`"scenario"` field in an http adapter's request. Splitting them keeps the
+test from being recognizable to the agent under test. A python adapter
+without the parameter gets an **error** result for a scenario case
+(`ScenarioNotSupportedError`), never a run without its setup. The example
+agent applies a scenario to its mock tools and session only; its planner
+never reads it.
+
+`agentforge adversarial generate` (`cli/agentforge_cli/adversarial.py`) is a
+pure function of (base cases, profile, seed): per category its own
+`random.Random(f"{seed}/{category}")`, sorted inputs, no clock — so the
+same inputs give byte-identical YAML (checked by a test against the
+committed dataset). The run's aggregates add `safety.by_category` from each
+case's `safety.category`.
+
+The release gate reads those per-category rates as policy metrics
+(`safety.<category>.pass_rate`, plus the pooled `safety.injection.pass_rate`),
+and the regression report carries per-category deltas (`safety`), which the
+dashboard's Safety page shows. A separate `safety_policy` in agentforge.yaml
+gates runs of the adversarial dataset; the CI gate evaluates both datasets for
+the base branch and the PR and gates each with its own policy.
 
 ### Agent trajectories: how a step gets from the agent to the dashboard
 
@@ -160,7 +204,10 @@ Its planner is scripted Python, not a model.
 | Its results / metric scores never change | `assert_accepts_results()`; no client write route at all | triggers block INSERT/UPDATE/DELETE on `evaluation_results` and `metric_scores` |
 | Its agent steps never change | written only by the worker, with the result | trigger blocks INSERT/UPDATE/DELETE on `agent_steps` (migration `e8b4c2d61a9f`) |
 | A release decision never changes | no update/delete route | trigger blocks every UPDATE/DELETE on `release_decisions` (migration `f3c7a9e2b510`) |
-| A baseline points to a completed run of its own application | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` |
+| A baseline points to a completed run of its own application and dataset | `PUT /baselines` → `400`/`404` | trigger checks every INSERT/UPDATE on `baselines` (dataset check: migration `b9e4f1c27d36`) |
+| A finished run's spans never change | written only by the API (run creation) and the worker, while the run is pending/running | trigger blocks INSERT/UPDATE/DELETE on `trace_spans` (migration `c3d7e2a94b18`) |
+| A finished replay and its steps, scores and spans never change | `replays.transition()` / `assert_accepts_outcome()`; written only by the worker | triggers block UPDATE/DELETE of a completed/failed `replays` row and INSERT/UPDATE/DELETE on `replay_steps`, `replay_metric_scores`, `replay_spans` (migration `d4a8f2c61e57`) |
+| A replay never changes the run it replays | the replay only reads the original result; its outcome goes to the replay tables | the original run's triggers still apply (it's finished) |
 | A published case's trajectory expectations never change | `PATCH` → `409` | the published-`test_cases` trigger covers every column, `trajectory` included |
 
 Triggers are PL/pgSQL on Postgres and equivalent per-operation triggers on
@@ -176,6 +223,110 @@ score/evidence becomes a `heuristic_context_precision@1.0.0` metric row
 stuck in `running` (the CLI died mid-run) is marked failed, since no worker
 will ever pick it up. Phase 1 runs have no stored aggregates, so the API
 computes them on read with the same function the worker uses.
+
+## Tracing (Phase 6)
+
+`agentforge_api/tracing.py` sets up one OpenTelemetry `TracerProvider` per
+process (API: `agentforge-api`, worker: `agentforge-worker`) with one
+`RedactingProcessor`: it replaces PII in each ended span's attributes, events
+and status message (the `pii_leak` regexes; `AGENTFORGE_TRACE_REDACTION=off`
+skips this) and hands the copy to the `SpanCollector` and, only if
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, an OTLP/HTTP `BatchSpanProcessor`. So
+nothing is stored or exported unredacted. `AGENTFORGE_TRACING=off` skips all
+of it.
+
+```
+POST /runs        start span agentforge.run.create; insert the run; end the span;
+                  store it (trace_spans, no result id) in the same commit as the run;
+                  enqueue the job with its W3C carrier ({"traceparent": ...})
+worker job        extract the carrier; start agentforge.run as its child
+  per case        agentforge.case
+                    invoke_agent        current while the adapter runs:
+                                        - sync python adapter: its daemon thread runs in
+                                          contextvars.copy_context() of the caller
+                                        - http adapter: traceparent header injected
+                                        - the agent's own spans (agentforge_sdk.tracing)
+                                          become children; LangGraph's executor threads
+                                          inherit the context too
+                    evaluate <name>     one per evaluator
+                  case span ends -> collector.take_subtree(case span) -> rows written
+                  with the case's result (same transaction as result, scores, steps)
+  end of run      run span ends -> its rows flushed before the final status change
+                  (the trigger refuses span writes once completed/failed); anything
+                  still buffered for the trace is discarded (e.g. a timed-out
+                  adapter thread's late spans)
+```
+
+`GET /traces/{result_id}` (the case's result id in a run) loads
+the case's spans and the run-level spans of the same trace and returns them
+as a tree, each span marked with the agent step that reported it
+(`agent_steps.span_id`). Nothing in the tree is computed from steps; spans
+inside an HTTP agent are never collected.
+
+## Failure replay (Phase 7 part A)
+
+```
+POST /replay {result_id, overrides}      apps/api/agentforge_api/routers/replays.py
+  -> 404 unknown result; 409 run not finished; 400 overrides on an http adapter (it can't declare settings)
+  -> copy the run's adapter, pinned evaluators, threshold, latency budget, timeout, provider onto a
+     `replays` row (status pending); store the API's agentforge.replay.create span with it; commit
+  -> enqueue "execute_replay" (_job_id "replay:<id>") with the span's carrier; Redis down -> failed + 503
+
+worker: execute_replay(replay_id)        apps/worker/agentforge_worker/replay.py
+  finished already? -> no-op;  running (previous attempt died) -> clear its partial outcome, start over
+  build the adapter, resolve the pinned evaluators, check_overrides(adapter, overrides)
+      -> the adapter's declaration (agentforge_sdk.replay.replayable) decides; any mismatch:
+         failed, "overrides rejected: adapter '<target>': <every problem>"  (the agent never runs)
+  runner._run_case(...)  -- the run's own per-case code path: agent call (overrides passed only
+                            if there are some), evaluators with the case's config, spans
+  write the outcome (answer, status, tokens, latency), replay_steps, replay_metric_scores and the
+  case's spans while running; then the replay span's rows + the flip to completed
+
+GET /replays/{id}  -> the replay, its steps/metrics/span tree, and the diff against the original
+                      result (services/replay_diff.py, computed from both sides' stored rows)
+```
+
+The override contract lives in the SDK (no server imports): an adapter
+declares `Setting`s (bool / int / float / str / text / choice / object
+with fields, optional cross-setting check), the worker validates the
+requested overrides against them, and only validated values reach the
+adapter, as `overrides=`. The API image has no adapters installed, so this
+check can only happen in the worker; the API checks only the overrides'
+shape. A replay without overrides calls the adapter with exactly the
+arguments the run used, which is what makes the determinism check
+(`diff.identical`) meaningful.
+
+## Adapter settings, the cost cap, and the LLM planner (benchmarks)
+
+A run can carry **adapter settings** (`evaluation_runs.adapter_settings`,
+migration `f8b2d6c43a19`): the same contract as replay overrides, applied to
+every case. The worker checks them against the adapter's declaration before
+the first case (`adapter settings rejected: ...` fails the run) and passes
+them as `overrides=`. A replay copies the run's settings onto its row and puts
+its own overrides on top, so it starts from what the run used.
+
+`max_cost_usd` caps a run: after each case the worker estimates that case's
+spend from the tokens and model the adapter reported and the pricing file
+(`agentforge_evaluators.cost_usd`, the estimated_cost formula), and fails the
+run -- results so far kept -- once the total passes the cap, or as soon as a
+case's spend can't be measured (an error, no tokens, no price). It's checked
+between cases, never mid-case.
+
+```
+agentforge compare --models ... | --plan benchmarks/compare.yaml  (CLI)
+  -> skip models without a key / Ollama / price; estimate; refuse over --max-cost unless --yes
+  -> per model (plan order) x its datasets x its repeats: POST /runs {adapter: answer_llm, adapter_settings: {provider, model,
+     temperature, prompt?}, max_cost_usd: budget left}; poll; add the run's spend
+  -> table + benchmarks/<date>-compare-<hash>.json (validated against benchmark_schema.json)
+
+worker -> invoice_agent.adapter:answer_llm(input, scenario, overrides=settings)
+  LangGraph: agent node = one model call (invoice_agent.llm: OpenAI / Anthropic / Ollama SDKs),
+  ToolNode = the same mock tools; D3 filters and guards tools in code, D1/D2/D4/D5 are prompt text
+```
+
+Provider keys reach only the worker's environment (docker-compose from the
+git-ignored `.env`); provider errors are re-raised scrubbed and without their
+cause, and span redaction replaces key-shaped strings as a second line.
 
 ## Reproducibility metadata recorded per run
 
@@ -336,8 +487,5 @@ Two more operational findings from getting this running:
 
 ## Not implemented yet
 
-Release gate in CI and its dashboard pages (the gate itself is API + CLI), replay, trace/span
-persistence (trajectories are what the adapter reports, not instrumented
-traces), safety/adversarial testing, model
-comparison, LLM-as-judge evaluators, Regression/Trace Explorer/Safety
-dashboard pages, authentication. See the root README.
+LLM-as-judge evaluators, authentication. The model comparison has been run
+once (README "Benchmarks: real LLM agents"). See the root README.

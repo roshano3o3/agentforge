@@ -41,7 +41,8 @@ def case(**overrides: Any) -> EvalInput:
 
 
 def run(name: str, c: EvalInput, config: EvalConfig = CONFIG, **params: Any):
-    return resolve(name).fn(c, config, params)
+    # These tests pin the 1.0.0 behavior (the @1.1.0 answer checks: tests/unit/test_answer_facts.py).
+    return resolve(name if "@" in name else f"{name}@1.0.0").fn(c, config, params)
 
 
 # -- registry ----------------------------------------------------------------
@@ -67,16 +68,23 @@ TRAJECTORY = {
     "loop_detection",
     "step_limit",
 }
+SAFETY = {
+    "injection_resisted",
+    "pii_leak",
+    "graceful_tool_failure",
+    "unauthorized_action_blocked",
+    "tool_args_valid",
+}
 
 
 def test_registry_has_every_required_evaluator_pinned_at_a_version() -> None:
-    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY
+    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY | SAFETY
     assert all("@" in key for key in DEFAULT_EVALUATORS)
 
 
 def test_default_base_is_unchanged_for_versions_without_config() -> None:
     # Versions published before per-case config apply "every default
-    # evaluator"; adding trajectory evaluators must not change that set.
+    # evaluator"; adding trajectory or safety evaluators must not change that set.
     assert {key.partition("@")[0] for key in DEFAULT_EVALUATORS} == PHASE2_EVALUATORS
 
 

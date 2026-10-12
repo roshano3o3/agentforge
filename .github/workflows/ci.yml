@@ -95,20 +95,27 @@ jobs:
       # Host networking lets it reach the service containers on 127.0.0.1.
       - name: Build and start the worker container
         run: |
-          docker build -f apps/worker/Dockerfile -t agentforge-worker .
+          docker build -f apps/worker/Dockerfile --build-arg AGENTFORGE_GIT_SHA=${{ github.sha }} -t agentforge-worker .
           docker run -d --name agentforge-test-worker --network host \
             -e AGENTFORGE_DATABASE_URL="$AGENTFORGE_TEST_DATABASE_URL" \
             -e AGENTFORGE_REDIS_URL="$AGENTFORGE_TEST_REDIS_URL" \
             agentforge-worker
 
+      # Failing tests are also printed as ::error annotations, which are readable without a log download.
       - name: pytest (Postgres; schema via Alembic, e2e through Redis + worker)
-        run: python -m pytest tests -v
+        run: |
+          set -o pipefail
+          python -m pytest tests -v -rfE 2>&1 | tee pytest-postgres.log || {
+            grep -E '^(FAILED|ERROR) ' pytest-postgres.log | sed 's/^/::error title=pytest (Postgres)::/'; exit 1; }
 
       - name: pytest (SQLite fallback)
         env:
           AGENTFORGE_TEST_DATABASE_URL: ""
           AGENTFORGE_TEST_REDIS_URL: ""
-        run: python -m pytest tests -v
+        run: |
+          set -o pipefail
+          python -m pytest tests -v -rfE 2>&1 | tee pytest-sqlite.log || {
+            grep -E '^(FAILED|ERROR) ' pytest-sqlite.log | sed 's/^/::error title=pytest (SQLite)::/'; exit 1; }
 
       - name: Worker logs
         if: always()
@@ -161,7 +168,7 @@ jobs:
 
       - name: Build and start the worker container
         run: |
-          docker build -f apps/worker/Dockerfile -t agentforge-worker .
+          docker build -f apps/worker/Dockerfile --build-arg AGENTFORGE_GIT_SHA=${{ github.sha }} -t agentforge-worker .
           docker run -d --name agentforge-e2e-worker --network host \
             -e AGENTFORGE_DATABASE_URL="$AGENTFORGE_E2E_DATABASE_URL" \
             -e AGENTFORGE_REDIS_URL="$AGENTFORGE_E2E_REDIS_URL" \
@@ -175,9 +182,27 @@ jobs:
       - name: npm ci
         working-directory: apps/web
         run: npm ci
+      # The browser download once hung until the job timed out (25 min): cache it per
+      # Playwright version, and give each install attempt 5 minutes, with one retry.
+      - name: Playwright version
+        id: playwright-version
+        working-directory: apps/web
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}-chromium
       - name: Install Chromium
         working-directory: apps/web
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 11
+        # With a cache hit the download is skipped; --with-deps still installs the system packages.
+        run: |
+          for attempt in 1 2; do
+            if timeout 5m npx playwright install --with-deps chromium; then exit 0; fi
+            echo "::warning::playwright install attempt $attempt failed or timed out"
+          done
+          exit 1
 
       - name: Playwright
         working-directory: apps/web

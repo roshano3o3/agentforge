@@ -19,6 +19,7 @@ if (-not (Test-Path ".env")) {
 # turns that into a terminating error whenever output is redirected -- and a real
 # failure (non-zero exit) isn't caught at all. So relax it and check the exit code.
 $ErrorActionPreference = "Continue"
+$env:AGENTFORGE_GIT_SHA = & (Join-Path $PSScriptRoot "git-sha.ps1")  # the worker image records it
 docker compose up -d --build
 if ($LASTEXITCODE -ne 0) { throw "docker compose up failed (exit $LASTEXITCODE)" }
 $ErrorActionPreference = "Stop"

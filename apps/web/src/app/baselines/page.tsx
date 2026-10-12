@@ -30,7 +30,7 @@ export default function BaselinesPage() {
     <main className="page">
       <h1>Baselines</h1>
       <p className="meta-line">
-        A baseline is a pointer: (application, environment) → one completed run. Setting it changes only the pointer;
+        A baseline is a pointer: (application, environment, dataset) → one completed run of that dataset, so an environment can name a different run per dataset. Setting it changes only the pointer;
         nothing is copied. Set one with <code className="mono">agentforge baseline set &lt;run_id&gt; --env production</code>.
       </p>
 
@@ -64,7 +64,10 @@ export default function BaselinesPage() {
             </thead>
             <tbody>
               {rows.map((b) => (
-                <tr key={`${b.application_id}:${b.environment}`} data-baseline={`${b.application_name}:${b.environment}`}>
+                <tr
+                  key={`${b.application_id}:${b.environment}:${b.dataset_name}`}
+                  data-baseline={`${b.application_name}:${b.environment}:${b.dataset_name}`}
+                >
                   <td>{b.application_name}</td>
                   <td>
                     <span className="badge badge-label">{b.environment}</span>

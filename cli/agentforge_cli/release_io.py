@@ -6,8 +6,12 @@
       maximums: {p95_latency_ms: 500}
       regressions: {pass_rate: {max_drop: 0.02}}
       cases: {no_newly_failing_tags: [critical]}
+    safety_policy:                        # optional: same format, for runs of an
+      minimums:                           # adversarial dataset (safety.<category>.pass_rate)
+        safety.pii_probe.pass_rate: 0.8
 
-The policy is validated here (offline, same parser as the API), so a typo
+`agentforge gate --policy safety_policy` applies the second one. Each policy
+is validated here (offline, same parser as the API), so a typo
 fails before anything is sent; the API validates it again and computes every
 check itself.
 """
@@ -22,7 +26,8 @@ import yaml
 
 from agentforge_evaluators import Policy, PolicyError, parse_policy
 
-CONFIG_KEYS = {"api_url", "release_policy"}
+POLICY_KEYS = ("release_policy", "safety_policy")
+CONFIG_KEYS = {"api_url", *POLICY_KEYS}
 
 
 class ConfigError(Exception):
@@ -32,7 +37,12 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class ProjectConfig:
     api_url: str | None
-    policy: Policy | None
+    policies: dict[str, Policy]
+
+    @property
+    def policy(self) -> Policy | None:
+        """The default policy (`release_policy`)."""
+        return self.policies.get("release_policy")
 
 
 def load_config(path: Path) -> ProjectConfig:
@@ -50,13 +60,14 @@ def load_config(path: Path) -> ProjectConfig:
     api_url = raw.get("api_url")
     if api_url is not None and not isinstance(api_url, str):
         raise ConfigError(f"{path}: api_url must be a string")
-    policy = None
-    if "release_policy" in raw:
-        try:
-            policy = parse_policy(raw["release_policy"])
-        except PolicyError as exc:
-            raise ConfigError(f"{path}: release_policy: {exc}") from exc
-    return ProjectConfig(api_url=api_url, policy=policy)
+    policies: dict[str, Policy] = {}
+    for key in POLICY_KEYS:
+        if key in raw:
+            try:
+                policies[key] = parse_policy(raw[key])
+            except PolicyError as exc:
+                raise ConfigError(f"{path}: {key}: {exc}") from exc
+    return ProjectConfig(api_url=api_url, policies=policies)
 
 
 # -- rendering ------------------------------------------------------------------------
@@ -85,12 +96,18 @@ def verdict_line(passed: bool) -> str:
     return f"RELEASE GATE: {'PASSED' if passed else 'FAILED'}"
 
 
-def markdown_report(decision: dict[str, Any]) -> str:
-    """The decision as GitHub-flavored Markdown (for $GITHUB_STEP_SUMMARY)."""
+def markdown_report(decision: dict[str, Any], title: str | None = None) -> str:
+    """The decision as GitHub-flavored Markdown (for $GITHUB_STEP_SUMMARY).
+    `title` (e.g. "Safety dataset") makes it a section of a combined report."""
     passed = decision["passed"]
     failed = sum(1 for c in decision["checks"] if not c["passed"])
+    heading = (
+        f"### {title}: {'PASSED' if passed else 'FAILED'}"
+        if title
+        else f"## AgentForge release gate: {'PASSED' if passed else 'FAILED'}"
+    )
     lines = [
-        f"## AgentForge release gate: {'PASSED' if passed else 'FAILED'}",
+        heading,
         "",
         f"**{decision['application_name']}** — candidate run `{decision['candidate_run_id']}` vs baseline "
         f"`{decision['baseline_ref']}` (run `{decision['baseline_run_id']}`). "
@@ -119,6 +136,9 @@ def markdown_report(decision: dict[str, Any]) -> str:
             tags = f" [{', '.join(case['tags'])}]" if case["tags"] else ""
             failed_by = ", ".join(case["candidate_failed_evaluators"]) or case["candidate_status"]
             lines.append(f"- `{case['case_key']}`{tags}: {failed_by}")
+    if title:
+        lines += ["", f"**{title}: {'PASSED' if passed else 'FAILED'}**"]
+        return "\n".join(lines) + "\n\n"
     lines += ["", "All checks are arithmetic over persisted run aggregates; none is an LLM judgment.", ""]
     lines.append(f"**{verdict_line(passed)}**")
     # Trailing blank line: several gates may append to the same step summary.

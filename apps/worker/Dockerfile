@@ -31,4 +31,9 @@ RUN pip install --no-cache-dir \
 ENV AGENTFORGE_PRICING_FILE=/app/config/pricing.yaml
 WORKDIR /app/apps/worker
 
+# Recorded on every run and replay as its code version (agentforge_worker.provenance).
+# Last, so a new commit doesn't invalidate the cached layers above.
+ARG AGENTFORGE_GIT_SHA=
+ENV AGENTFORGE_GIT_SHA=${AGENTFORGE_GIT_SHA}
+
 CMD ["arq", "agentforge_worker.main.WorkerSettings"]
