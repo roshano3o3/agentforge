@@ -197,6 +197,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   0.67). Estimator uses measured cost/case (checked against pricing git history); ran ~2x low on refund/void subsets.
   Spend $0.41. Summary JSON `benchmarks/2026-10-12-part-c.json` (`benchmarks/part_c_summary.py`). The same person
   labeled the calibration sets and built the evaluators (README limits).
+  Tests: SQLite 408 + 22 skipped; Postgres 430; Playwright 14 (CI; run-flow.spec expects the @1.1.0 reasons).
 - Calibration labels are frozen by hash: a changed label is a new file, never an edit. Never change an evaluator
   to make the mutant or held-out numbers go up; that's what a new, unseen set is for.
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
