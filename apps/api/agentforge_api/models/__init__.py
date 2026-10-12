@@ -10,6 +10,7 @@ from agentforge_api.models.evaluation import (
 )
 from agentforge_api.models.release import Baseline, ReleaseDecision
 from agentforge_api.models.replay import Replay, ReplayMetricScore, ReplaySpan, ReplayStep
+from agentforge_api.models.rescore import Rescore, RescoreMetricScore, RescoreResult
 from agentforge_api.models.trace import TraceSpan
 
 __all__ = [
@@ -31,4 +32,7 @@ __all__ = [
     "ReplayMetricScore",
     "ReplaySpan",
     "ReplayStep",
+    "Rescore",
+    "RescoreMetricScore",
+    "RescoreResult",
 ]

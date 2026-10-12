@@ -118,6 +118,29 @@ def case_evaluators(
     return applied
 
 
+def evaluate_one(
+    spec: EvaluatorSpec, params: dict[str, Any], case: EvalInput, config: EvalConfig
+) -> tuple[MetricOutcome, Exception | None]:
+    """One evaluator on one case. An evaluator that raises is a failed metric (with the error, which is
+    also returned), never propagated; the case's params are recorded in the evidence. Shared by runs,
+    replays and re-scores."""
+    error: Exception | None = None
+    try:
+        outcome = spec.fn(case, config, params)
+    except Exception as exc:  # noqa: BLE001
+        error = exc
+        outcome = MetricOutcome(
+            score=None,
+            passed=False,
+            reason=f"evaluator error: {type(exc).__name__}: {exc}",
+            evidence={"error_type": type(exc).__name__},
+            labels=["evaluator-error"],
+        )
+    if params:
+        outcome.evidence = {**outcome.evidence, "params": params}
+    return outcome, error
+
+
 def score_case(
     evaluators: list[tuple[EvaluatorSpec, dict[str, Any]]], case: EvalInput, config: EvalConfig
 ) -> list[tuple[EvaluatorSpec, MetricOutcome]]:
@@ -136,19 +159,9 @@ def score_case(
                 "agentforge.evaluator.params": params or None,
             },
         ) as s:
-            try:
-                outcome = spec.fn(case, config, params)
-            except Exception as exc:  # noqa: BLE001
+            outcome, exc = evaluate_one(spec, params, case, config)
+            if exc is not None:
                 tracing.error(s, f"{type(exc).__name__}: {exc}", exc)
-                outcome = MetricOutcome(
-                    score=None,
-                    passed=False,
-                    reason=f"evaluator error: {type(exc).__name__}: {exc}",
-                    evidence={"error_type": type(exc).__name__},
-                    labels=["evaluator-error"],
-                )
-            if params:
-                outcome.evidence = {**outcome.evidence, "params": params}
             s.set_attributes(
                 tracing.attrs(
                     {

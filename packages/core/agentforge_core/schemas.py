@@ -718,3 +718,52 @@ class ReplayOut(ReplaySummaryOut):
     started_at: datetime | None
     provenance: ReplayProvenanceOut
     diff: ReplayDiffOut | None  # completed replays only
+
+
+# -- re-scores (Benchmarks part C) ------------------------------------------------------------------
+
+
+class RescoreCreate(BaseModel):
+    """Score a finished run's stored outputs again with other evaluator versions (no adapter call).
+    Each entry is `name@version` (or a bare name: its latest version); it replaces the run's pinned
+    version of that evaluator by name. Which evaluators apply to a case is still the dataset config's."""
+
+    evaluators: list[str] = Field(min_length=1, max_length=50)
+
+
+class RescoreResultOut(BaseModel):
+    original_result_id: str
+    case_key: str
+    status: ResultStatus  # the original result's status (an error/timeout stays one; it has no scores)
+    original_passed: bool | None
+    passed: bool
+    changed: bool  # the case verdict differs from the original's
+    metrics: list[MetricScoreOut]
+    # Copied from the original result, so a re-score can be summarized like a run.
+    latency_ms: float
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str | None
+    safety: SafetyIn | None = None
+
+
+class RescoreSummaryOut(BaseModel):
+    id: str
+    original_run_id: str
+    status: Literal["pending", "running", "completed", "failed"]
+    requested_evaluators: list[str]
+    evaluators: list[str]
+    replaced: dict[str, str]
+    error_message: str | None
+    aggregates: dict[str, Any] | None
+    original_aggregates: dict[str, Any] | None
+    newly_passing: int
+    newly_failing: int
+    code_version: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class RescoreOut(RescoreSummaryOut):
+    started_at: datetime | None
+    results: list[RescoreResultOut]

@@ -16,6 +16,7 @@ from agentforge_api.config import get_settings
 
 EXECUTE_RUN_JOB = "execute_run"
 EXECUTE_REPLAY_JOB = "execute_replay"
+EXECUTE_RESCORE_JOB = "execute_rescore"
 
 
 class QueueUnavailableError(RuntimeError):
@@ -30,6 +31,9 @@ class RunQueue(Protocol):
     # Same, for one replay (Phase 7): the worker re-runs one case.
     async def enqueue_replay(self, replay_id: str, trace_context: dict[str, str] | None = None) -> None: ...
 
+    # A re-score (Benchmarks part C): the worker scores a finished run's stored outputs again.
+    async def enqueue_rescore(self, rescore_id: str) -> None: ...
+
 
 class ArqRunQueue:
     def __init__(self, redis_url: str) -> None:
@@ -43,6 +47,9 @@ class ArqRunQueue:
 
     async def enqueue_replay(self, replay_id: str, trace_context: dict[str, str] | None = None) -> None:
         await self._enqueue(EXECUTE_REPLAY_JOB, "replay", replay_id, trace_context)
+
+    async def enqueue_rescore(self, rescore_id: str) -> None:
+        await self._enqueue(EXECUTE_RESCORE_JOB, "rescore", rescore_id, None)
 
     async def _enqueue(self, job_name: str, what: str, item_id: str, trace_context: dict[str, str] | None) -> None:
         try:

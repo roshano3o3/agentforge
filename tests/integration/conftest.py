@@ -51,6 +51,7 @@ class RecordingQueue:
     def __init__(self) -> None:
         self.enqueued: list[str] = []
         self.enqueued_replays: list[str] = []
+        self.enqueued_rescores: list[str] = []
         # run id -> the W3C trace carrier the API put on the job (the worker's
         # execute_run takes it as trace_context).
         self.trace_contexts: dict[str, dict[str, str] | None] = {}
@@ -67,6 +68,11 @@ class RecordingQueue:
             raise QueueUnavailableError(self.fail_with)
         self.enqueued_replays.append(replay_id)
         self.trace_contexts[replay_id] = trace_context
+
+    async def enqueue_rescore(self, rescore_id: str) -> None:
+        if self.fail_with:
+            raise QueueUnavailableError(self.fail_with)
+        self.enqueued_rescores.append(rescore_id)
 
 
 @pytest.fixture
