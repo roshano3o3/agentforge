@@ -14,13 +14,7 @@ from agentforge_api.models.trace import TraceSpan
 from agentforge_api.queue import QueueUnavailableError, RunQueue, get_run_queue
 from agentforge_api.services import runs as run_service
 from agentforge_core.schemas import EvaluationRunCreate, EvaluationRunOut, EvaluationRunSummaryOut
-from agentforge_evaluators import (
-    DEFAULT_ANSWER_EVALUATORS,
-    DEFAULT_EVALUATORS,
-    UnknownEvaluatorError,
-    referenced_keys,
-    resolve,
-)
+from agentforge_evaluators import DEFAULT_EVALUATORS, UnknownEvaluatorError, referenced_keys, resolve
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -32,7 +26,7 @@ async def _pin_evaluators(
     name@version, so a later evaluator release never changes what this run
     means. Unknown names are a 400, before anything is persisted.
 
-    Default: exactly the evaluators the dataset version's configs reference, plus DEFAULT_ANSWER_EVALUATORS
+    Default: exactly the evaluators the dataset version's configs reference
     (all registered ones for versions without a default config). An explicit
     list is a filter: per case, only configured evaluators that are also in
     the list run.
@@ -44,8 +38,7 @@ async def _pin_evaluators(
             await session.scalars(select(TestCase.evaluators).where(TestCase.dataset_version_id == dataset_version.id))
         )
         referenced = referenced_keys(dataset_version.default_evaluators, case_configs)
-        # A version with an evaluator config also gets the default answer evaluators (config.effective_config).
-        specs = DEFAULT_EVALUATORS if referenced is None else [*referenced, *DEFAULT_ANSWER_EVALUATORS]
+        specs = DEFAULT_EVALUATORS if referenced is None else referenced
         if not specs:
             raise HTTPException(
                 status_code=400,

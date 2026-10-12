@@ -39,9 +39,12 @@ test("start a run from the UI and see the worker's completed per-case results", 
   await select("Dataset").selectOption({ label: "rag-support" });
   await expect(select("Published version")).toContainText("5 cases");
   await expect(form.getByRole("textbox", { name: "Adapter target" })).toHaveValue("rag_app.adapter:answer");
-  // Every registered evaluator version is pre-selected: 9 answer/retrieval/measurement + 7 trajectory + 5 safety
-  // at 1.0.0, plus answer_contains, answer_regex and graceful_tool_failure at 1.1.0.
-  await expect(form.getByRole("checkbox")).toHaveCount(24);
+  // Every registered evaluator version is listed: 9 answer/retrieval/measurement + 7 trajectory + 5 safety at
+  // 1.0.0, answer_contains, answer_regex and graceful_tool_failure at 1.1.0, and the opt-in answer_grounded
+  // 1.0.0 / 1.1.0. All but the two opt-in ones are pre-selected.
+  await expect(form.getByRole("checkbox")).toHaveCount(26);
+  await expect(form.getByRole("checkbox", { checked: true })).toHaveCount(24);
+  await expect(form.getByRole("checkbox", { name: /answer_grounded/ }).first()).not.toBeChecked();
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "run-new-form.png"), fullPage: true });
 
   await form.getByRole("button", { name: "Start run" }).click();

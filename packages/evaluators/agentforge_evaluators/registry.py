@@ -178,6 +178,16 @@ register(
     _NO_PARAMS,
 )
 register(
+    "answer_grounded",
+    "1.1.0",
+    "quality",
+    "as 1.0.0, but examples ('for example, INV-1001') aren't claims, 'no payment reminder' isn't a payment count, "
+    "general/conditional sentences claim no outcome, a status binds to the nearest invoice, and '$X has been paid' "
+    "isn't a status; opt-in",
+    grounding.answer_grounded_v11,
+    _NO_PARAMS,
+)
+register(
     "heuristic_context_precision",
     "1.0.0",
     "quality",
@@ -339,11 +349,12 @@ def _first_versions(kinds: tuple[str, ...]) -> list[str]:
 # per-case config existed). Trajectory and safety evaluators are deliberately
 # left out, so those versions keep exactly the evaluators they had when published --
 # the 1.0.0 versions, even after a newer version of the same evaluator is registered.
-# Evaluators applied to every case of a run on a dataset version with an evaluator config, in addition to
-# that config (a case can still drop one with `name: false`). A run pins them when it's created, so a run
-# that didn't pin one is never scored with it (re-scoring can add it explicitly).
-DEFAULT_ANSWER_EVALUATORS: list[str] = ["answer_grounded@1.0.0"]
-_ADDED_LATER = frozenset(k.partition("@")[0] for k in DEFAULT_ANSWER_EVALUATORS)
+# Opt-in evaluators: never pinned by default (not in DEFAULT_EVALUATORS, not added at run creation). A run
+# or re-score that pins one explicitly (`--evaluators` / `rescore -e`) applies it to every case of a dataset
+# version with an evaluator config, unless a case drops it with `name: false` (config.effective_config).
+# answer_grounded is opt-in until it's validated on a fresh held-out set (README, Benchmarks part D).
+OPT_IN_EVALUATORS: frozenset[str] = frozenset({"answer_grounded"})
+_ADDED_LATER = OPT_IN_EVALUATORS
 
 DEFAULT_EVALUATORS: list[str] = [
     k for k in _first_versions(("quality", "measurement")) if k.partition("@")[0] not in _ADDED_LATER

@@ -26,6 +26,13 @@ Checked facts:
 
 Not applicable when the adapter reported no trajectory (no steps at all): there's nothing to ground in.
 
+@1.1.0 fixes the five false-positive classes 1.0.0 showed on real model outputs (Benchmarks part D): an
+example ("for example, INV-1001") is not a claim; "no payment reminder" is not a payment count; a general or
+conditional sentence ("reminders are only sent for unpaid invoices", "if you want that refund processed")
+claims no outcome; a status belongs to the invoice named closest to it; "$350.00 has been paid" is not the
+invoice's status. Those fixes were made after seeing 1.0.0's held-out and benchmark results, so 1.1.0's
+numbers on them are in-sample. Both versions are opt-in (registry.OPT_IN_EVALUATORS).
+
 Known limits: English only; a fact the answer states in words ("forty dollars") isn't parsed; a name is a
 run of 2-4 capitalized words, so a one-word name isn't checked; dates aren't checked; a fact that is in
 the trajectory but attached to the wrong thing (the right amount for the wrong invoice) passes.
@@ -174,10 +181,71 @@ def _clause_invoices(clause: str, answer_invoices: set[str]) -> set[str]:
     return found or (answer_invoices if len(answer_invoices) == 1 else set())
 
 
-def _problems(case: EvalInput, support: _Support) -> tuple[list[str], dict[str, Any]]:
-    answer = case.answer
+# -- @1.1.0: the five false-positive classes 1.0.0 showed on the benchmark re-score and the held-out set --
+# 1. an example is not a claim: "(for example, INV-1001)", "e.g. $40", "such as ..." are dropped first;
+_EXAMPLE = re.compile(r"\((?:for example|for instance|e\.g\.|such as)[^)]*\)|\b(?:for example|e\.g\.)[^.;)]*", re.I)
+# 2. "no payment reminder" is not a payment count: the noun must not be followed by reminder/history/...;
+_PAYMENT_COUNT_11 = re.compile(
+    r"\b(\d+|one|two|three|four|five|six|no|zero)\s+payments?\b(?!\s+(?:reminders?|history|methods?|links?|plans?))",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "no": 0, "zero": 0}
+# 3. a conditional ("if you want that refund processed") or a general statement about a class of things
+#    ("payment reminders are only sent for unpaid invoices") claims no outcome;
+_CONDITIONAL = re.compile(r"^\s*(?:if|when|once|unless|whenever)\b|\bif you\b", re.IGNORECASE)
+_GENERAL = re.compile(
+    r"\b(?:reminders|refunds|voids|invoices|deletions)\s+(?:are|aren't|can|can't|cannot|should|must)\b"
+    r"|\bonly (?:sent|issued|processed|voided)\b",
+    re.IGNORECASE,
+)
+# 4. a status belongs to the invoice named closest before it in the clause, not to every invoice in it;
+# 5. "$350.00 has been paid" is an amount being paid, not the invoice's status (an id's digits aren't an amount).
+_AMOUNT_PAID = re.compile(
+    r"(?<![\w-])\$?\d[\d,.]*\s*(?:USD|dollars?)?\s+(?:has been|have been|was|were|is)\s+(?:already\s+)?paid", re.I
+)
+
+
+def _strip_examples(text: str) -> str:
+    return _EXAMPLE.sub(" ", text)
+
+
+def _payment_counts_11(text: str) -> set[int]:
+    out = set()
+    for m in _PAYMENT_COUNT_11.finditer(text):
+        word = m.group(1).lower()
+        out.add(int(word) if word.isdigit() else _NUMBER_WORDS[word])
+    return out
+
+
+def _stated_claims(text: str) -> facts.Facts:
+    """facts.extract's outcome claims, without conditional or general clauses."""
+    merged = facts.Facts()
+    for clause in facts.clauses(text):
+        if _CONDITIONAL.search(clause) or _GENERAL.search(clause):
+            continue
+        for action, outcomes in facts.extract(clause).claims.items():
+            merged.claims.setdefault(action, set()).update(outcomes)
+    return merged
+
+
+def _status_targets(clause: str, start: int, answer_invoices: set[str]) -> set[str]:
+    before = _INVOICE.findall(clause[:start])
+    if before:
+        return {before[-1]}
+    after = _INVOICE.findall(clause[start:])
+    if after:
+        return {after[0]}
+    return answer_invoices if len(answer_invoices) == 1 else set()
+
+
+def _problems(case: EvalInput, support: _Support, fixed: bool = False) -> tuple[list[str], dict[str, Any]]:
+    """`fixed`: @1.1.0's handling of the five classes above; False is @1.0.0 exactly."""
+    answer = _strip_examples(case.answer) if fixed else case.answer
     problems: list[str] = []
     stated = facts.extract(answer)
+    if fixed:
+        stated.payment_count = _payment_counts_11(answer)
+        stated.claims = _stated_claims(answer).claims
     invoices = set(_INVOICE.findall(answer))
     checked: dict[str, Any] = {}
 
@@ -203,19 +271,25 @@ def _problems(case: EvalInput, support: _Support) -> tuple[list[str], dict[str, 
     for clause in facts.clauses(answer):
         if _ATTRIBUTED.search(clause):
             continue
-        claimed = [
-            m.group(1).lower() for m in _STATUS_CLAIM.finditer(clause) if not facts.NEGATOR.search(clause[: m.start()])
-        ]
+        matches = [m for m in _STATUS_CLAIM.finditer(clause) if not facts.NEGATOR.search(clause[: m.start()])]
+        if fixed:
+            matches = [m for m in matches if not (m.group(1).lower() == "paid" and _AMOUNT_PAID.search(clause))]
+        claimed = [m.group(1).lower() for m in matches]
         if not claimed:
             continue
-        for inv in sorted(_clause_invoices(clause, invoices)):
+        pairs = (
+            [(inv, m.group(1).lower()) for m in matches for inv in _status_targets(clause, m.start(), invoices)]
+            if fixed
+            else [(inv, status) for inv in sorted(_clause_invoices(clause, invoices)) for status in claimed]
+        )
+        for inv in sorted({inv for inv, _s in pairs}):
             recorded_statuses = support.statuses.get(inv)
             if recorded_statuses is None:
                 failed = [s for s in support.failed_reads if inv in json.dumps(s.args)]
                 why = f"{_where(failed[0])} failed" if failed else "no tool result describes it"
-                problems.append(f"status '{claimed[0]}' of {inv}: {why}")
+                problems.append(f"status '{next(s for i, s in pairs if i == inv)}' of {inv}: {why}")
                 continue
-            for status in claimed:
+            for status in [s for i, s in pairs if i == inv]:
                 if status not in {k for k, _w in recorded_statuses}:
                     k, w = recorded_statuses[-1]
                     problems.append(f"status '{status}' of {inv}: {w} says '{k}'")
@@ -258,12 +332,22 @@ def _outcome_problems(case: EvalInput, stated: facts.Facts) -> list[str]:
 
 
 def answer_grounded(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
+    """@1.0.0."""
+    return _grounded(case, fixed=False)
+
+
+def answer_grounded_v11(case: EvalInput, config: EvalConfig, params: Params) -> MetricOutcome:
+    """@1.1.0: 1.0.0 with its five false-positive classes fixed (see the constants above)."""
+    return _grounded(case, fixed=True)
+
+
+def _grounded(case: EvalInput, fixed: bool) -> MetricOutcome:
     if not case.steps:
         return not_applicable("the adapter reported no trajectory, so there is nothing to ground the answer in")
     if not case.answer.strip():
         return not_applicable("no final answer")
     support = _support(case)
-    problems, evidence = _problems(case, support)
+    problems, evidence = _problems(case, support, fixed)
     passed = not problems
     return MetricOutcome(
         score=1.0 if passed else 0.0,

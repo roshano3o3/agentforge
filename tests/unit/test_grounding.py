@@ -1,5 +1,5 @@
 """answer_grounded@1.0.0, on trajectories and answers written for the test (not from any run or calibration set),
-and how it joins a run's evaluators (DEFAULT_ANSWER_EVALUATORS)."""
+and how it joins a run's evaluators (opt-in)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 
 from agentforge_cli import calibration as cal
 from agentforge_evaluators import (
-    DEFAULT_ANSWER_EVALUATORS,
     DEFAULT_EVALUATORS,
+    OPT_IN_EVALUATORS,
     EvalConfig,
     EvalInput,
     TrajectoryStep,
@@ -127,8 +127,8 @@ def test_no_trajectory_is_not_applicable() -> None:
     assert out.passed is None
 
 
-def test_default_answer_evaluators_join_configured_runs_only() -> None:
-    assert DEFAULT_ANSWER_EVALUATORS == ["answer_grounded@1.0.0"]
+def test_answer_grounded_is_opt_in() -> None:
+    assert "answer_grounded" in OPT_IN_EVALUATORS
     assert not any(k.startswith("answer_grounded") for k in DEFAULT_EVALUATORS)  # legacy no-config versions unchanged
     default = {"tool_selection": {}}
     pinned = ["tool_selection@1.0.0", "answer_grounded@1.0.0"]
@@ -159,3 +159,57 @@ def test_calibration_numbers_are_pinned() -> None:
     assert _flagged("answer_checks_holdout_v1.yaml") == ["hold-005", "hold-006"]
     assert len(_flagged("answer_checks_mutants_v1.yaml")) == 30
     assert len(_flagged("answer_checks_mutants_holdout_v1.yaml")) == 27
+
+
+GROUNDED_11 = resolve("answer_grounded@1.1.0").fn
+
+
+@pytest.mark.parametrize(
+    ("answer", "steps", "text"),
+    [
+        # 1. an example isn't a claim
+        ("Which invoice? Include its number (for example, INV-4321).", [], "Refund the double charge"),
+        # 2. "no payment reminder" isn't a payment count
+        ("INV-2001 is open, so no payment reminder was needed.", LOOKUPS, "Remind INV-2001"),
+        # 3. a general or conditional sentence claims no outcome
+        ("Payment reminders are only sent for overdue invoices.", LOOKUPS, "Remind INV-2001"),
+        ("If you want that refund processed, send it again on its own.", LOOKUPS, "Refund INV-2001"),
+        # 4. a status binds to the nearest invoice, not every invoice in the clause
+        (
+            "I looked at INV-2001 as a duplicate of INV-2002, which is already paid.",
+            [
+                *LOOKUPS,
+                _call(4, "get_invoice", {"invoice_id": "INV-2002"}, {**INVOICE, "id": "INV-2002", "status": "paid"}),
+            ],
+            "Void INV-2001",
+        ),
+        # 5. an amount being paid isn't the invoice's status
+        ("INV-2001 is open and $140.00 has been paid so far.", LOOKUPS, "Status of INV-2001?"),
+    ],
+)
+def test_1_1_0_fixes_the_five_false_positive_classes(answer: str, steps: list[TrajectoryStep], text: str) -> None:
+    case = _case(answer, steps, text)
+    assert GROUNDED_11(case, EvalConfig(), {}).passed, GROUNDED_11(case, EvalConfig(), {}).reason
+    assert GROUNDED(case, EvalConfig(), {}).passed is False  # 1.0.0 flags each one
+
+
+def test_1_1_0_still_catches_what_1_0_0_caught() -> None:
+    steps = [
+        _call(1, "send_payment_reminder", {"invoice_id": "INV-2001", "email": "ar@lumentile.example"}, {"sent": True})
+    ]
+    out = GROUNDED_11(_case("INV-2001 is open, so no reminder was sent.", steps, "Remind INV-2001"), EvalConfig(), {})
+    assert out.passed is False and "claims remind not done: send_payment_reminder at step 1 succeeded" in out.reason
+    assert GROUNDED_11(_case("INV-2001 is open: 740.00 USD.", LOOKUPS), EvalConfig(), {}).passed is False
+
+
+def test_1_1_0_calibration_numbers_are_pinned_and_in_sample() -> None:
+    """1.1.0 was written after 1.0.0's held-out and benchmark results were seen: every number here is in-sample."""
+
+    def flagged(file: str) -> list[str]:
+        items = cal.load(CALIBRATION_DIR / file)
+        return [i["id"] for i in items if GROUNDED_11(cal.eval_input(i), EvalConfig(), {}).passed is False]
+
+    assert flagged("answer_checks_v1.yaml") == ["cal-030"]  # 0 of 35 correct; cal-031 was 1.0.0's binding bug
+    assert flagged("answer_checks_holdout_v1.yaml") == []
+    assert len(flagged("answer_checks_mutants_v1.yaml")) == 30
+    assert len(flagged("answer_checks_mutants_holdout_v1.yaml")) == 27
