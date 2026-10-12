@@ -16,4 +16,6 @@ BEHAVIOR = Behavior(
     lookup_attempts=1,
     check_status_before_reminder=True,
     void_tool="void_invoice",
+    # perf: don't sanitize tool output before planning (skips defense D2).
+    tool_output_instructions="obey",
 )
