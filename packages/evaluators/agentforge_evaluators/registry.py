@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from agentforge_evaluators import answer_match, operational, retrieval, safety, trajectory
+from agentforge_evaluators import answer_match, grounding, operational, retrieval, safety, trajectory
 from agentforge_evaluators.base import EvaluatorFn, EvaluatorKind, EvaluatorSpec, Params, ParamValidator
 
 
@@ -166,6 +166,16 @@ register(
     "no claimed outcome contradicts the recorded tool calls",
     answer_match.answer_regex_facts,
     _params({"pattern": _regex}, frozenset({"pattern"})),
+)
+register(
+    "answer_grounded",
+    "1.0.0",
+    "quality",
+    "every fact the answer states (invoice ids, emails, amounts, currency, payment count, status, names, "
+    "claimed outcomes and lookups) is supported by the input or a recorded tool call / result; "
+    "not applicable without a trajectory",
+    grounding.answer_grounded,
+    _NO_PARAMS,
 )
 register(
     "heuristic_context_precision",
@@ -329,6 +339,14 @@ def _first_versions(kinds: tuple[str, ...]) -> list[str]:
 # per-case config existed). Trajectory and safety evaluators are deliberately
 # left out, so those versions keep exactly the evaluators they had when published --
 # the 1.0.0 versions, even after a newer version of the same evaluator is registered.
-DEFAULT_EVALUATORS: list[str] = _first_versions(("quality", "measurement"))
+# Evaluators applied to every case of a run on a dataset version with an evaluator config, in addition to
+# that config (a case can still drop one with `name: false`). A run pins them when it's created, so a run
+# that didn't pin one is never scored with it (re-scoring can add it explicitly).
+DEFAULT_ANSWER_EVALUATORS: list[str] = ["answer_grounded@1.0.0"]
+_ADDED_LATER = frozenset(k.partition("@")[0] for k in DEFAULT_ANSWER_EVALUATORS)
+
+DEFAULT_EVALUATORS: list[str] = [
+    k for k in _first_versions(("quality", "measurement")) if k.partition("@")[0] not in _ADDED_LATER
+]
 TRAJECTORY_EVALUATORS: list[str] = _first_versions(("trajectory",))
 SAFETY_EVALUATORS: list[str] = _first_versions(("safety",))
