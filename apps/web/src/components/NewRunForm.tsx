@@ -17,6 +17,11 @@ type LoadState = "loading" | "ready" | "error";
 
 /** Starts a run: the API creates it `pending` and queues it; the worker
  * (Docker) executes it. Navigates to the run's page, which shows progress. */
+function isDefaultSelection(evaluators: Evaluator[], selected: string[]): boolean {
+  const defaults = evaluators.filter((ev) => !ev.opt_in).map((ev) => ev.key);
+  return selected.length === defaults.length && defaults.every((k) => selected.includes(k));
+}
+
 export default function NewRunForm() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>("loading");
@@ -45,7 +50,7 @@ export default function NewRunForm() {
         setApps(a);
         setDatasets(d);
         setEvaluators(e);
-        setSelected(e.map((ev) => ev.key));
+        setSelected(e.filter((ev) => !ev.opt_in).map((ev) => ev.key));
         if (a.length) setAppId(a[0].id);
         if (d.length) setDatasetName(d[0].name);
         setState("ready");
@@ -87,8 +92,9 @@ export default function NewRunForm() {
         application_version_id: appVersionId,
         dataset_version_id: datasetVersionId,
         adapter: { type: adapterType, target: adapterTarget.trim() },
-        // All checked = no filter: each case applies what its dataset config declares.
-        evaluators: selected.length === evaluators.length ? null : selected,
+        // The default selection (every evaluator but the opt-in ones) = no filter: each case applies what its
+        // dataset config declares. Anything else is sent as the run's list; a checked opt-in evaluator joins it.
+        evaluators: isDefaultSelection(evaluators, selected) ? null : selected,
         threshold: Number(threshold),
         timeout_seconds: Number(timeoutSeconds),
         provider_type: "local-deterministic",
@@ -202,6 +208,7 @@ export default function NewRunForm() {
               }
             />
             <span className="mono">{ev.key}</span>
+            {ev.opt_in && <span className="meta-line"> (opt-in)</span>}
           </label>
         ))}
       </fieldset>

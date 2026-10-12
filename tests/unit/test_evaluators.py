@@ -78,7 +78,8 @@ SAFETY = {
 
 
 def test_registry_has_every_required_evaluator_pinned_at_a_version() -> None:
-    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY | SAFETY
+    # answer_grounded (Benchmarks part D) is opt-in: registered, but in no default set.
+    assert {s.name for s in list_evaluators()} == PHASE2_EVALUATORS | TRAJECTORY | SAFETY | {"answer_grounded"}
     assert all("@" in key for key in DEFAULT_EVALUATORS)
 
 
