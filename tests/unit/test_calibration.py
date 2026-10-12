@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from agentforge_cli import mutants
+
 CALIBRATION_DIR = Path(__file__).parents[2] / "datasets" / "calibration"
 CALIBRATION = CALIBRATION_DIR / "answer_checks_v1.yaml"
 HOLDOUT = CALIBRATION_DIR / "answer_checks_holdout_v1.yaml"
@@ -58,3 +60,32 @@ def test_holdout_shares_no_output_with_the_dev_set() -> None:
     holdout = load_items(HOLDOUT)
     assert not {key(i) for i in dev} & {key(i) for i in holdout}
     assert not {i["source"]["result_id"] for i in dev} & {i["source"]["result_id"] for i in holdout}
+
+
+MUTANTS = CALIBRATION_DIR / "answer_checks_mutants_v1.yaml"
+# The mutants' answer is part of what's pinned: it's generated, so the text is the label's basis.
+FROZEN_MUTANTS_SHA256 = "7c3cbe4099c45700a0ae2df4ec290015de9d4167a083987937f45e40cfde55a9"
+
+
+def test_mutants_are_frozen_and_regenerate_byte_for_byte() -> None:
+    items = load_items(MUTANTS)
+    canon = json.dumps(
+        [[i["id"], i["check"], i["source"]["result_id"], i["label"], i["answer"]] for i in items],
+        separators=(",", ":"),
+    )
+    assert hashlib.sha256(canon.encode()).hexdigest() == FROZEN_MUTANTS_SHA256
+    regenerated = mutants.render(mutants.generate(load_items(HOLDOUT)))
+    assert regenerated == MUTANTS.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+def test_every_mutant_breaks_one_fact_of_a_holdout_answer() -> None:
+    holdout = {i["id"]: i for i in load_items(HOLDOUT)}
+    items = load_items(MUTANTS)
+    assert len(items) == 30 and len({i["id"] for i in items}) == 30
+    for item in items:
+        original = holdout[item["mutation"]["from"]]
+        assert item["label"] == "incorrect" and item["answer"] != original["answer"]
+        assert original["label"] == "correct"
+        assert item["steps"] == original["steps"] and item.get("params") == original.get("params")
+        if item["check"] == "graceful_tool_failure":
+            assert item["mutation"]["type"] in ("success_after_failure", "dropped_negation")
