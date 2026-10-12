@@ -16,6 +16,11 @@ evaluators in each case's effective config -- nothing else.
 When a dataset version has no default config at all (versions written
 before per-case config existed), the base is "every evaluator the run
 pinned", with no params: exactly the Phase 2 behavior.
+
+With a default config, an opt-in evaluator the run pinned explicitly
+(registry.OPT_IN_EVALUATORS, e.g. answer_grounded) is added to it with no
+params unless the config names it (a case's `false` drops it). No run pins
+one by default.
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from agentforge_evaluators.registry import InvalidParamsError, UnknownEvaluatorError, resolve
+from agentforge_evaluators.registry import OPT_IN_EVALUATORS, InvalidParamsError, UnknownEvaluatorError, resolve
 
 # Normalized: key -> params dict, or False (disabled).
 EvaluatorConfig = dict[str, dict[str, Any] | bool]
@@ -77,8 +82,13 @@ def effective_config(
     run_evaluators: Iterable[str],
 ) -> dict[str, dict[str, Any]]:
     """The evaluators (key -> params) that apply to one case."""
+    run_evaluators = list(run_evaluators)
     base: Mapping[str, Any] = default if default is not None else {key: {} for key in run_evaluators}
     by_name: dict[str, tuple[str, Any]] = {_name(k): (k, v) for k, v in base.items()}
+    if default is not None:
+        for key in run_evaluators:
+            if _name(key) in OPT_IN_EVALUATORS and _name(key) not in by_name:
+                by_name[_name(key)] = (key, {})
     for key, value in (case or {}).items():
         by_name[_name(key)] = (key, value)
     return {key: dict(value or {}) for key, value in by_name.values() if value is not False}

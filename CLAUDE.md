@@ -65,7 +65,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-12, Phase 7 + benchmarks A/B/C on main; Phase 8 next)
+## Current status (2026-10-12, Phase 7 + benchmarks A-D on main; benchmarks done; Phase 8 next)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -198,6 +198,19 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   Spend $0.41. Summary JSON `benchmarks/2026-10-12-part-c.json` (`benchmarks/part_c_summary.py`). The same person
   labeled the calibration sets and built the evaluators (README limits).
   Tests: SQLite 408 + 22 skipped; Postgres 430; Playwright 14 (CI; run-flow.spec expects the @1.1.0 reasons).
+- **Benchmarks part D done, merged to main** (2026-10-12): `answer_grounded` (grounding.py): every answer fact
+  (ids, emails, amounts incl. totals/differences, currency, payment count, status, names, outcomes, lookups) must be
+  supported by the input or a tool call/result; n/a without a trajectory. **Opt-in** (`OPT_IN_EVALUATORS`): no default
+  set, no run pins it unless asked; GET /evaluators marks it, the new-run form leaves it unchecked. Fresh held-out
+  mutants (27, seed 11) committed BEFORE the evaluator. 1.0.0: dev FP 0/35, held-out FP 2/25, mutants 30/30 + 27/27;
+  benchmark re-score (28 runs, 365 answers) flagged 15 case groups = 1 real (Llama "no reminder sent" after it was)
+  + 14 false positives (examples, "no payment reminder", conditional/general sentences, status bound to every
+  invoice in a clause, "$X has been paid"); as a default it would have failed PR #2. 1.1.0 fixes those five (ALL
+  its numbers in-sample): 0/35, 0/25, 30/30, 27/27; benchmark: 1 real + 1 FP ("such as ... (INV-1001)"), no verdict
+  change. No further iterations; needs validation on fresh real outputs before any default. Summary
+  `benchmarks/2026-10-12-part-d.json` (`part_d_summary.py`). Dev data purge in part C bypassed immutability
+  triggers by hand: production needs an audited admin command (README limits).
+  Tests: SQLite 432 + 22 skipped; Postgres 454; Playwright 14 (run-flow.spec: 26 checkboxes, 24 pre-checked).
 - Calibration labels are frozen by hash: a changed label is a new file, never an edit. Never change an evaluator
   to make the mutant or held-out numbers go up; that's what a new, unseen set is for.
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
@@ -227,7 +240,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 7. Failure replay — **done** (A: override contract, replay engine, diff, API, CLI; B: recorded replay options +
    API 400, provenance warnings, Trace Explorer Replay button, override form, side-by-side diff, replay list)
 Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README;
-C: evaluators @1.1.0 + calibration (dev / held-out / mutants), rescore, schema + Ollama-template fixes, measured estimator).
+C: evaluators @1.1.0 + calibration (dev / held-out / mutants), rescore, schema + Ollama-template fixes, measured estimator;
+D: answer_grounded, opt-in, 1.0.0 held-out + 1.1.0 in-sample).
 **Next: Phase 8.**
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
