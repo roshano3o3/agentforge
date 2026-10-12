@@ -15,6 +15,7 @@ from agentforge_evaluators import EvalConfig, EvalInput, TrajectoryStep, resolve
 from agentforge_evaluators import facts as F
 
 CALIBRATION = Path(__file__).parents[2] / "datasets" / "calibration" / "answer_checks_v1.yaml"
+HOLDOUT = CALIBRATION.with_name("answer_checks_holdout_v1.yaml")
 
 
 @pytest.mark.parametrize(
@@ -137,3 +138,16 @@ def test_calibration_agreement_is_pinned() -> None:
     assert (old.items, old.agree, len(old.false_positives), len(old.false_negatives)) == (45, 25, 19, 1)
     assert (new.items, new.agree, len(new.false_positives), len(new.false_negatives)) == (45, 44, 1, 0)
     assert new.false_positives == ["cal-026"]  # Llama lists $200 and $150 but never states the $350 total
+
+
+def test_holdout_agreement_is_pinned() -> None:
+    """Agreement on the held-out set (labeled before either version ran on it). Every item is labeled
+    correct, so this measures false positives only."""
+    items = cal.load(HOLDOUT)
+    old = cal.total(cal.agreement(items, "1.0.0"), "1.0.0")
+    new = cal.total(cal.agreement(items, "1.1.0"), "1.1.0")
+    assert (old.items, old.agree, len(old.false_positives), len(old.false_negatives)) == (25, 22, 3, 0)
+    assert (new.items, new.agree, len(new.false_positives), len(new.false_negatives)) == (25, 25, 0, 0)
+    # 1.0.0 wants the scripted wording: "2 payment(s)" / "350.00 USD" (hold-004 says "two payments", "350.00"),
+    # "can't make that change" (hold-007/008 say "can't help with changing")
+    assert old.false_positives == ["hold-004", "hold-007", "hold-008"]
