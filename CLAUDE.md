@@ -14,7 +14,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 - Web: Next.js dashboard — `apps/web` (Playwright e2e in `apps/web/e2e`)
 - CLI: Typer (`agentforge`) — `cli/`; shared Pydantic schemas — `packages/core`
 - Evaluators: `packages/evaluators` — `name@version` registry, 21 deterministic evaluators (9 answer/
-  retrieval/measurement + 7 trajectory in `trajectory.py` + 5 safety in `safety.py`), aggregates; one dep: `jsonschema`
+  retrieval/measurement + 7 trajectory in `trajectory.py` + 5 safety in `safety.py`), aggregates; one dep: `jsonschema`.
+  `answer_contains`/`answer_regex`/`graceful_tool_failure` also have @1.1.0 (fact-based, `facts.py`); bare names resolve
+  to the latest, a run pins its versions. Calibration sets in `datasets/calibration/` (dev 45, held-out 25, mutants 30)
 - Adversarial generator: `cli/agentforge_cli/adversarial.py` (pure; `agentforge adversarial generate`), profile
   `examples/invoice_agent/adversarial_profile.yaml`, output `datasets/invoice_agent_safety_v1.yaml` (35 variants)
 - SDK: `packages/sdk` (adapter contract: python `module:fn` + http, optional `steps` trajectory);
@@ -25,7 +27,9 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   (`llm.py` providers, `llm_planner.py`, `prompts/system.md`)) + `datasets/invoice_agent_v1.yaml`
 - Benchmarks: `agentforge compare --plan benchmarks/compare.yaml` (default: scripted v1, ollama llama3.1:8b,
   claude-haiku-4-5, claude-sonnet-5-5) or `--models`; `cli/agentforge_cli/benchmark.py`, schema
-  `benchmark_schema.json`, results JSON in `benchmarks/`; keys only in the git-ignored `.env`
+  `benchmark_schema.json`, results JSON in `benchmarks/` (the pre-run estimate reads them: measured cost per case);
+  keys only in the git-ignored `.env`. `agentforge rescore <run> -e name@version,...` re-scores stored outputs
+  (tables `rescores`/`rescore_results`/`rescore_metric_scores`, migration `a9c3e7d15b42`, frozen like runs)
 - Python 3.12, Node 18+
 
 ## Rules (non-negotiable)
@@ -61,7 +65,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-07, Phase 7 + benchmarks on main; Phase 8 next)
+## Current status (2026-10-12, Phase 7 + benchmarks A/B/C on main; Phase 8 next)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -178,8 +182,23 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   agent's phrasing; `graceful_tool_failure` flags a claim inside a negation ("not voided"); the profile's
   `request_human_approval.action` enum isn't in the tool signature (`tool_args_valid` fails every model on
   `amount-in-words`); Ollama's stock llama3.1 template drops the tool list after turn 1 (prompt shrinks ~946 -> ~570).
-  Llama ran 58% CPU / 42% GPU (GTX 1650 Ti 4 GB). Fixing any of these = a new dataset version / profile + re-run.
+  Llama ran 58% CPU / 42% GPU (GTX 1650 Ti 4 GB). All four were addressed in part C (new evaluator versions, the
+  tool signature, a separate Ollama model), never by editing the frozen dataset.
   Tests: SQLite 361 + 21 skipped; Postgres 382; Playwright 14 (not re-run locally; only the form's timeout max changed).
+- **Benchmarks part C done, merged to main** (2026-10-12): answer checks @1.1.0 (fact-based, negation-aware
+  `graceful_tool_failure`); calibration: dev 45 (1.0.0 25/45, 1.1.0 44/45 in-sample), held-out 25 all correct
+  (22/25 vs 25/25; false positives only), mutants 30 all incorrect (`cli/agentforge_cli/mutants.py`, seed 7; 11/30
+  caught by EACH version; 1.1.0 misses wrong amount/currency/invoice id the check's params don't name -- reported,
+  deliberately not fixed). `agentforge rescore`; all 15 Part B runs re-scored @1.1.0, none newly failing: Haiku traj
+  0.50 -> 1.00, safety 0.77 -> 0.86; Sonnet 0.50 -> 0.70 / 0.86 -> 0.91 (its 3 traj failures = extra verification reads
+  that tool_selection penalizes, NOT changed on purpose); Llama 0.20 -> 0.30. Fixes: request_human_approval.action
+  Literal enum (re-runs: amount-in-words case 0/3 -> 3/3 both models, 4 other cases unchanged); Ollama template
+  (`examples/invoice_agent/ollama/llama3.1-tools.Modelfile`, tools in the system block: Llama pass 0.30, approval
+  0.67). Estimator uses measured cost/case (checked against pricing git history); ran ~2x low on refund/void subsets.
+  Spend $0.41. Summary JSON `benchmarks/2026-10-12-part-c.json` (`benchmarks/part_c_summary.py`). The same person
+  labeled the calibration sets and built the evaluators (README limits).
+- Calibration labels are frozen by hash: a changed label is a new file, never an edit. Never change an evaluator
+  to make the mutant or held-out numbers go up; that's what a new, unseen set is for.
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
 - The committed screenshots had drifted since Phases 4-6 (old nav, missing evaluators); all 15 were re-captured in part B.
   When Playwright rewrites them, compare with the committed ones before deciding they changed (IDs/timestamps always do).
@@ -206,7 +225,8 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
    B: PII redaction, Trace Explorer page, overhead profile)
 7. Failure replay — **done** (A: override contract, replay engine, diff, API, CLI; B: recorded replay options +
    API 400, provenance warnings, Trace Explorer Replay button, override form, side-by-side diff, replay list)
-Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README).
+Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README;
+C: evaluators @1.1.0 + calibration (dev / held-out / mutants), rescore, schema + Ollama-template fixes, measured estimator).
 **Next: Phase 8.**
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
