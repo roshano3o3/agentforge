@@ -18,8 +18,11 @@ estimated or capped).
 
 Cost safety:
   * before anything runs, an estimate per model and in total is printed
-    (`estimate`, assumptions stated with it). Over --max-cost it refuses to
-    start unless --yes is given;
+    (`estimate`). Where earlier results in benchmarks/ measured the model's
+    cost per case (priced with the same pricing file), the estimate is that
+    measured mean -- per dataset, else over all datasets the model ran; only
+    a model never measured falls back to the stated assumptions. Over
+    --max-cost it refuses to start unless --yes is given;
   * every LLM run carries a cost cap (`max_cost_usd`) equal to what's left of
     --max-cost; the worker stops the run when its estimated spend passes it,
     or when a case's spend can't be measured;
@@ -266,6 +269,74 @@ class Estimate:
     input_tokens_per_case: int
     output_tokens_per_case: int
     usd: float
+    # "assumed" (the ASSUMED_* constants), or "measured" (mean cost per case of earlier runs).
+    basis: str = "assumed"
+    measured_runs: int = 0
+    measured_tokens_per_case: float | None = None
+
+
+@dataclass(frozen=True)
+class MeasuredCost:
+    """Mean estimated cost and tokens per case over earlier runs of one model (on one dataset, or on all)."""
+
+    usd_per_case: float
+    tokens_per_case: float | None
+    runs: int
+
+
+ALL_DATASETS = "*"
+
+
+def pricing_file_sha256(path: Path) -> str:
+    """Same hash the worker records (agentforge_worker.provenance.pricing_sha256)."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def measured_costs(directory: Path, pricing_sha256: str) -> dict[tuple[str, str], MeasuredCost]:
+    """(model spec, dataset name or ALL_DATASETS) -> measured cost per case, from the results JSON files in
+    `directory`. Only documents priced with this pricing file count (another price table would make the
+    per-case cost wrong); runs without a measured cost (no tokens reported) don't count. The all-datasets
+    figure weights each run by its dataset's case count."""
+    per_dataset: dict[tuple[str, str], list[tuple[float, float | None]]] = {}
+    totals: dict[str, list[float]] = {}  # model -> [usd, tokens, cases, runs, cases with tokens]
+    for path in sorted(directory.glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict) or doc.get("schema") != SCHEMA_ID:
+            continue
+        if pricing_sha256 not in (doc.get("agentforge") or {}).get("pricing_sha256", []):
+            continue
+        cases = {d["name"]: d["cases"] for d in doc.get("datasets", [])}
+        for row in doc.get("results", []):
+            model, dataset = row["model"], row["dataset"]
+            for run in row.get("runs", []):
+                metrics = run.get("metrics") or {}
+                usd, tokens = metrics.get("cost_per_case_usd"), metrics.get("tokens_per_case")
+                if usd is None:
+                    continue
+                per_dataset.setdefault((model, dataset), []).append((usd, tokens))
+                n = cases.get(dataset, 0)
+                t = totals.setdefault(model, [0.0, 0.0, 0.0, 0.0, 0.0])
+                t[0] += usd * n
+                t[2] += n
+                t[3] += 1
+                if tokens is not None:
+                    t[1] += tokens * n
+                    t[4] += n
+    out: dict[tuple[str, str], MeasuredCost] = {}
+    for key, values in per_dataset.items():
+        toks = [tk for _u, tk in values if tk is not None]
+        out[key] = MeasuredCost(
+            usd_per_case=statistics.fmean(u for u, _t in values),
+            tokens_per_case=statistics.fmean(toks) if toks else None,
+            runs=len(values),
+        )
+    for model, (usd, tokens, n, runs, n_tok) in totals.items():
+        if n:
+            out[(model, ALL_DATASETS)] = MeasuredCost(usd / n, tokens / n_tok if n_tok else None, int(runs))
+    return out
 
 
 def base_input_tokens(prompt_chars: int, tool_schema_chars: int) -> int:
@@ -273,13 +344,39 @@ def base_input_tokens(prompt_chars: int, tool_schema_chars: int) -> int:
 
 
 def estimate(
-    spec: ModelSpec, cases: int, repeats: int, base_tokens: int, pricing: Mapping[str, ModelPrice]
+    spec: ModelSpec,
+    cases: int,
+    repeats: int,
+    base_tokens: int,
+    pricing: Mapping[str, ModelPrice],
+    datasets: Iterable[tuple[str, int]] = (),
+    measured: Mapping[tuple[str, str], MeasuredCost] | None = None,
 ) -> Estimate:
-    """A rough, deliberately high estimate: ASSUMED_TURNS_PER_CASE model turns per case, each resending
-    the prompt and tool schemas plus the history so far, and a fixed output per turn (more for reasoning
-    models, whose thinking is billed as output)."""
+    """The model's measured cost per case when earlier runs measured it (`measured`, per dataset in
+    `datasets` -- (name, cases) -- else its mean over all datasets it ran), otherwise a rough, deliberately
+    high assumption: ASSUMED_TURNS_PER_CASE model turns per case, each resending the prompt and tool
+    schemas plus the history so far, and a fixed output per turn (more for reasoning models, whose
+    thinking is billed as output)."""
     if not spec.is_llm:
         return Estimate(spec.raw, cases, repeats, 0, 0, 0.0)
+    if measured:
+        rows = list(datasets) or [(ALL_DATASETS, cases)]
+        picked = [(measured.get((spec.raw, name)) or measured.get((spec.raw, ALL_DATASETS)), n) for name, n in rows]
+        if all(m is not None for m, _n in picked):
+            usd = sum(m.usd_per_case * n for m, n in picked if m is not None) * repeats
+            toks = [(m.tokens_per_case, n) for m, n in picked if m is not None and m.tokens_per_case is not None]
+            total_n = sum(n for _t, n in toks)
+            return Estimate(
+                spec.raw,
+                cases,
+                repeats,
+                0,
+                0,
+                usd,
+                basis="measured",
+                measured_runs=max(m.runs for m, _n in picked if m is not None),
+                measured_tokens_per_case=sum(t * n for t, n in toks) / total_n if total_n else None,
+            )
     turns = ASSUMED_TURNS_PER_CASE
     per_turn_out = (
         ASSUMED_REASONING_OUTPUT_TOKENS_PER_TURN
@@ -589,7 +686,15 @@ def document(
         "estimate": {
             "assumptions": estimate_assumptions(),
             "per_model": [
-                {"model": e.spec, "cases": e.cases, "runs_per_dataset": e.runs, "usd": e.usd} for e in plan.estimates
+                {
+                    "model": e.spec,
+                    "cases": e.cases,
+                    "runs_per_dataset": e.runs,
+                    "usd": e.usd,
+                    "basis": e.basis,
+                    "measured_runs": e.measured_runs,
+                }
+                for e in plan.estimates
             ],
             "total_usd": plan.total_estimate,
         },
@@ -602,6 +707,8 @@ def document(
 
 def estimate_assumptions() -> str:
     return (
+        "measured models: the mean estimated cost per case of their earlier runs in benchmarks/ (same pricing "
+        "file; per dataset, else over all datasets they ran). Others: "
         f"{ASSUMED_TURNS_PER_CASE} model turns per case; each turn resends the system prompt and tool schemas "
         f"(chars/{CHARS_PER_TOKEN:g} + {ASSUMED_TOOL_PREAMBLE_TOKENS} tool-use tokens) plus "
         f"{ASSUMED_HISTORY_TOKENS_PER_TURN} tokens of history per earlier turn; output "

@@ -836,9 +836,18 @@ def _compare_models(
         base_tokens = benchmark.base_input_tokens(prompt_chars, schema_chars)
         runnable = [s for s in specs if s.raw not in skipped]
         plan = benchmark.Plan(specs, skipped, dataset_rows, repeats, [], plan_spec.entries)
+        measured = benchmark.measured_costs(
+            (output.parent if output is not None else Path("benchmarks")), benchmark.pricing_file_sha256(pricing_file)
+        )
         plan.estimates = [
             benchmark.estimate(
-                s, sum(d["cases"] for d in plan.datasets_for(s)), plan.repeats_for(s), base_tokens, pricing
+                s,
+                sum(d["cases"] for d in plan.datasets_for(s)),
+                plan.repeats_for(s),
+                base_tokens,
+                pricing,
+                datasets=[(d["name"], d["cases"]) for d in plan.datasets_for(s)],
+                measured=measured,
             )
             for s in runnable
         ]
@@ -846,17 +855,19 @@ def _compare_models(
             console.print("[red]No model can run here; nothing was started.[/red]")
             raise typer.Exit(code=1)
 
-        table = Table(title="Estimated cost before running (rough, deliberately high)")
-        for col in ("model", "cases x repeats", "tokens/case in+out", "est. USD"):
+        table = Table(title="Estimated cost before running")
+        for col in ("model", "cases x repeats", "basis", "tokens/case", "est. USD"):
             table.add_column(col)
         for e in plan.estimates:
-            table.add_row(
-                escape(e.spec),
-                f"{e.cases} x {e.runs}",
-                f"{e.input_tokens_per_case}+{e.output_tokens_per_case}" if e.input_tokens_per_case else "- (no model)",
-                f"${e.usd:.4f}",
-            )
-        table.add_row("[bold]total[/bold]", "", "", f"[bold]${plan.total_estimate:.4f}[/bold]")
+            if e.basis == "measured":
+                basis = f"measured ({e.measured_runs} run(s))"
+                tokens = f"{e.measured_tokens_per_case:.0f} in+out" if e.measured_tokens_per_case else "-"
+            elif e.input_tokens_per_case:
+                basis, tokens = "assumed (deliberately high)", f"{e.input_tokens_per_case}+{e.output_tokens_per_case}"
+            else:
+                basis, tokens = "-", "- (no model)"
+            table.add_row(escape(e.spec), f"{e.cases} x {e.runs}", basis, tokens, f"${e.usd:.4f}")
+        table.add_row("[bold]total[/bold]", "", "", "", f"[bold]${plan.total_estimate:.4f}[/bold]")
         console.print(table)
         console.print(f"Assumptions: {escape(benchmark.estimate_assumptions())}")
         if plan.total_estimate > max_cost and not yes:

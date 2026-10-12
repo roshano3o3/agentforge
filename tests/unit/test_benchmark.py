@@ -122,6 +122,54 @@ def test_estimate_arithmetic() -> None:
     assert benchmark.estimate(benchmark.parse_model_spec("scripted"), 10, 3, base, PRICES).usd == 0
 
 
+def _results_doc(pricing_sha: str, rows: list[tuple[str, str, list[float | None]]], cases: dict[str, int]) -> dict:
+    """A results document cut down to what measured_costs reads (hand-written numbers, not a run)."""
+    return {
+        "schema": benchmark.SCHEMA_ID,
+        "agentforge": {"pricing_sha256": [pricing_sha]},
+        "datasets": [{"name": n, "cases": c} for n, c in cases.items()],
+        "results": [
+            {
+                "model": model,
+                "dataset": dataset,
+                "runs": [{"metrics": {"cost_per_case_usd": usd, "tokens_per_case": 1000.0}} for usd in costs],
+            }
+            for model, dataset, costs in rows
+        ],
+    }
+
+
+def test_measured_costs_and_the_measured_estimate(tmp_path: Path) -> None:
+    haiku = "anthropic:claude-haiku-4-5"
+    doc = _results_doc(
+        "p1", [(haiku, "traj", [0.002, 0.004]), (haiku, "safety", [0.001, None])], {"traj": 10, "safety": 30}
+    )
+    (tmp_path / "a.json").write_text(json.dumps(doc), encoding="utf-8")
+    # Priced with another pricing file: ignored.
+    other = _results_doc("p0", [(haiku, "traj", [9.0])], {"traj": 10})
+    (tmp_path / "b.json").write_text(json.dumps(other), encoding="utf-8")
+    (tmp_path / "notes.json").write_text("[]", encoding="utf-8")
+    measured = benchmark.measured_costs(tmp_path, "p1")
+    assert measured[(haiku, "traj")].usd_per_case == pytest.approx(0.003) and measured[(haiku, "traj")].runs == 2
+    assert measured[(haiku, "safety")].runs == 1  # a run without a measured cost doesn't count
+    # Over all datasets, weighted by case count: (0.002*10 + 0.004*10 + 0.001*30) / 50.
+    assert measured[(haiku, benchmark.ALL_DATASETS)].usd_per_case == pytest.approx(0.0018)
+
+    spec = benchmark.parse_model_spec(haiku)
+    e = benchmark.estimate(spec, 12, 3, 0, PRICES, datasets=[("traj", 10), ("new", 2)], measured=measured)
+    assert e.basis == "measured" and e.measured_runs == 3  # the all-datasets mean behind "new"
+    assert e.usd == pytest.approx((0.003 * 10 + 0.0018 * 2) * 3)  # "new" falls back to the all-datasets mean
+    # A model never measured keeps the assumed estimate.
+    gpt = benchmark.estimate(benchmark.parse_model_spec("openai:gpt-5.4-mini"), 10, 1, 2000, PRICES, measured=measured)
+    assert gpt.basis == "assumed" and gpt.usd > 0
+
+
+def test_pricing_file_hash_matches_the_workers(tmp_path: Path) -> None:
+    f = tmp_path / "pricing.yaml"
+    f.write_bytes(b"models:\r\n  x: 1\r\n")
+    assert benchmark.pricing_file_sha256(f) == benchmark.hashlib.sha256(b"models:\n  x: 1\n").hexdigest()
+
+
 # -- running, the cap, repeats ----------------------------------------------------------------
 
 

@@ -130,7 +130,9 @@
               "model": {"type": "string"},
               "cases": {"type": "integer", "minimum": 0},
               "runs_per_dataset": {"type": "integer", "minimum": 1},
-              "usd": {"type": "number", "minimum": 0}
+              "usd": {"type": "number", "minimum": 0},
+              "basis": {"enum": ["assumed", "measured"]},
+              "measured_runs": {"type": "integer", "minimum": 0}
             }
           }
         },
