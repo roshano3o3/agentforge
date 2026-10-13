@@ -57,6 +57,7 @@ from invoice_agent.agent import PRESETS, V1, V1_WITHOUT_D2, V2, Behavior, build_
 from invoice_agent.config import BEHAVIOR
 from invoice_agent.llm_planner import RECURSION_LIMIT as LLM_RECURSION_LIMIT
 from invoice_agent.llm_planner import Defenses, build_llm_graph, builtin_prompt, token_totals
+from invoice_agent.tools import base_tools
 from invoice_agent.trace_recorder import Recorder, recording
 
 # Generous for these flows (at most ~8 graph steps); a policy that loops
@@ -85,8 +86,18 @@ def _steps(messages: Sequence[BaseMessage], recorder: Recorder) -> tuple[list[St
     return steps, answer
 
 
-def _run(behavior: Behavior, input_text: str, scenario: Mapping[str, Any] | None) -> AdapterOutput:
-    graph = _graph(behavior) if scenario is None else build_graph(behavior, scenario)
+def _tools(settings: Mapping[str, Any] | None) -> Any:
+    """The base tools a run or replay asked for: None (in-process, the default) or the MCP client's."""
+    settings = settings or {}
+    transport = settings.get("tools") or "in-process"
+    return None if transport == "in-process" else base_tools(transport, settings.get("mcp_server") or "")
+
+
+def _run(
+    behavior: Behavior, input_text: str, scenario: Mapping[str, Any] | None, overrides: Mapping[str, Any] | None
+) -> AdapterOutput:
+    tools = _tools(overrides)
+    graph = _graph(behavior) if scenario is None and tools is None else build_graph(behavior, scenario, tools)
     with recording() as recorder:
         state = graph.invoke(
             {"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": RECURSION_LIMIT}
@@ -103,6 +114,20 @@ _DEFENSES: dict[str, tuple[str, Any, Any]] = {
     "d4": ("redact_pii", True, False),
     "d5": ("handle_tool_errors", True, False),
 }
+_TOOL_SETTINGS = (
+    Setting(
+        "tools",
+        "choice",
+        "Where the agent's tools run: in-process, or over MCP (invoice_agent.mcp_server); same tools either way",
+        choices=("in-process", "mcp"),
+    ),
+    Setting(
+        "mcp_server",
+        "str",
+        "With tools=mcp: an MCP server URL (Streamable HTTP); empty launches the bundled server over stdio",
+        max_length=500,
+    ),
+)
 _SETTINGS = (
     Setting(
         "behavior",
@@ -115,13 +140,17 @@ _SETTINGS = (
     Setting("d3", "bool", "D3: check the session user's allowed_tools before each call"),
     Setting("d4", "bool", "D4: answers carry only a customer's name and billing email"),
     Setting("d5", "bool", "D5: stop and report after a failed tool call"),
+    *_TOOL_SETTINGS,
 )
+_TOOL_DEFAULTS: dict[str, Any] = {"tools": "in-process", "mcp_server": ""}
 
 
 def _replayable(base: Behavior) -> Any:
     """The shared settings, with defaults read from this adapter's own behavior."""
     preset = next((name for name, p in PRESETS.items() if p == base), None)
-    defaults = {"behavior": preset} | {k: getattr(base, f) == on for k, (f, on, _off) in _DEFENSES.items()}
+    defaults = (
+        {"behavior": preset} | {k: getattr(base, f) == on for k, (f, on, _off) in _DEFENSES.items()} | _TOOL_DEFAULTS
+    )
     return replayable(*_SETTINGS, defaults=defaults)
 
 
@@ -138,21 +167,21 @@ def with_overrides(base: Behavior, overrides: Mapping[str, Any] | None) -> Behav
 def answer(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
-    return _run(with_overrides(BEHAVIOR, overrides), input_text, scenario)
+    return _run(with_overrides(BEHAVIOR, overrides), input_text, scenario, overrides)
 
 
 @_replayable(V1)
 def answer_v1(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
-    return _run(with_overrides(V1, overrides), input_text, scenario)
+    return _run(with_overrides(V1, overrides), input_text, scenario, overrides)
 
 
 @_replayable(V2)
 def answer_v2(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
-    return _run(with_overrides(V2, overrides), input_text, scenario)
+    return _run(with_overrides(V2, overrides), input_text, scenario, overrides)
 
 
 @_replayable(V1_WITHOUT_D2)
@@ -160,7 +189,7 @@ def answer_v1_without_d2(
     input_text: str, scenario: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None
 ) -> AdapterOutput:
     """v1 with only defense D2 off (demo PR #4's configuration)."""
-    return _run(with_overrides(V1_WITHOUT_D2, overrides), input_text, scenario)
+    return _run(with_overrides(V1_WITHOUT_D2, overrides), input_text, scenario, overrides)
 
 
 # -- the LLM planner ---------------------------------------------------------------
@@ -175,10 +204,13 @@ _LLM_SETTINGS = (
     Setting("d3", "bool", "D3 (code): offer only the user's permitted tools and block any other call"),
     Setting("d4", "bool", "D4: prompt limits customer details in replies to name and billing email"),
     Setting("d5", "bool", "D5: prompt says to stop and report after a failed tool call"),
+    *_TOOL_SETTINGS,
 )
-_LLM_DEFAULTS: dict[str, Any] = {"provider": None, "model": None, "temperature": 0.0, "prompt": None} | {
-    f"d{i}": True for i in range(1, 6)
-}
+_LLM_DEFAULTS: dict[str, Any] = (
+    {"provider": None, "model": None, "temperature": 0.0, "prompt": None}
+    | {f"d{i}": True for i in range(1, 6)}
+    | _TOOL_DEFAULTS
+)
 
 
 def llm_config(settings: Mapping[str, Any]) -> llm.LLMConfig:
@@ -201,7 +233,7 @@ def answer_llm(
     settings = dict(overrides or {})
     config = llm_config(settings)
     defenses = Defenses(**{f"d{i}": bool(settings.get(f"d{i}", True)) for i in range(1, 6)})
-    graph = build_llm_graph(config, defenses, settings.get("prompt") or builtin_prompt(), scenario)
+    graph = build_llm_graph(config, defenses, settings.get("prompt") or builtin_prompt(), scenario, _tools(settings))
     with recording() as recorder:
         state = graph.invoke(
             {"messages": [HumanMessage(content=input_text)]}, config={"recursion_limit": LLM_RECURSION_LIMIT}

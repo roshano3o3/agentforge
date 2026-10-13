@@ -114,11 +114,20 @@ def test_declarations_are_checked_when_written() -> None:
         Setting("x", "object")
 
 
-def test_the_invoice_agent_declares_presets_and_defenses_only() -> None:
+def test_the_invoice_agent_declares_presets_defenses_and_tool_transport() -> None:
     for fn in (invoice.answer, invoice.answer_v1, invoice.answer_v2, invoice.answer_v1_without_d2):
         declared = replay_settings(fn)
         assert declared is not None
-        assert [s["name"] for s in declared.describe()] == ["behavior", "d1", "d2", "d3", "d4", "d5"]
+        assert [s["name"] for s in declared.describe()] == [
+            "behavior",
+            "d1",
+            "d2",
+            "d3",
+            "d4",
+            "d5",
+            "tools",
+            "mcp_server",
+        ]
     assert invoice.with_overrides(V1_WITHOUT_D2, None) is V1_WITHOUT_D2
     assert invoice.with_overrides(V1_WITHOUT_D2, {"d2": True}) == V1
     assert invoice.with_overrides(V1, {"behavior": "v2", "d1": True, "d3": True}) == replace(
