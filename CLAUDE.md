@@ -5,7 +5,7 @@ AgentForge: evaluation, safety testing, observability, and release gating for AI
 agents — a real working system, not a metrics-dashboard demo. Built in phases; each
 phase is a small, complete, honestly documented vertical slice.
 
-Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before changing things.
+Read `README.md`, `docs/limitations.md` and `docs/architecture.md` before changing things.
 
 ## Stack
 - API: FastAPI + SQLAlchemy 2 (async) + Alembic — `apps/api` (run state machine: `services/runs.py`)
@@ -30,7 +30,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   `benchmark_schema.json`, results JSON in `benchmarks/` (the pre-run estimate reads them: measured cost per case);
   keys only in the git-ignored `.env`. `agentforge rescore <run> -e name@version,...` re-scores stored outputs
   (tables `rescores`/`rescore_results`/`rescore_metric_scores`, migration `a9c3e7d15b42`, frozen like runs)
-- Python 3.12, Node 18+
+- Python 3.12, Node 20.9+ (Next.js 16's minimum)
 
 ## Rules (non-negotiable)
 - **No invented metrics.** Every number shown in the CLI, dashboard, or docs comes from a real
@@ -65,7 +65,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-12, Phase 7 + benchmarks A-D on main; benchmarks done; Phase 8 next)
+## Current status (2026-10-13, Phase 8 part A on main: presentation + first-run experience)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -211,11 +211,24 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
   `benchmarks/2026-10-12-part-d.json` (`part_d_summary.py`). Dev data purge in part C bypassed immutability
   triggers by hand: production needs an audited admin command (README limits).
   Tests: SQLite 432 + 22 skipped; Postgres 454; Playwright 14 (run-flow.spec: 26 checkboxes, 24 pre-checked).
+- **Phase 8 part A done, merged to main** (2026-10-13): Quick Start is `cp .env.example .env; docker compose up` (no keys):
+  compose now also builds the dashboard (`apps/web/Dockerfile`, `next build`/`next start`, NEXT_PUBLIC_API_URL baked in at
+  build = 127.0.0.1:8000) and a one-shot `seed` (`cli/Dockerfile`) running `agentforge demo seed` (`cli/agentforge_cli/demo.py`:
+  datasets, v1 production baseline, v2 + PR #4 runs gated, replay of PR #4's case with d2=on; ONLY into an empty DB, else
+  no-op exit 0); the API has a healthcheck. Fresh-clone test: attempt 1 broke (web image's .dockerignore dropped e2e/ but kept
+  playwright.config.ts, which `next build` type-checks); attempts 2-3 worked first try. Docs: README rewritten (5-minute
+  read); deep sections moved verbatim into docs/{features,development,trajectory,release-gate,safety,tracing,replay,
+  benchmarks,testing,limitations}.md; **docs/results.md is the ledger: every README number with its source -- add a row
+  for any new README number.** Screenshots + docs/demo.gif come ONLY from `scripts/demo-capture.ps1`
+  (apps/web/demo/capture.spec.ts) on a freshly seeded stack (it adds a draft + a replay, so use a throwaway stack); the e2e
+  specs now write their screenshots to apps/web/test-results/screenshots, never docs/. GIF: ffmpeg via the pinned
+  mwader/static-ffmpeg:7.1 image when no local ffmpeg; 64 colours keeps it < 10 MB. Node 20.9+ (Next.js 16).
+  Tests: SQLite 438 + 22 skipped; Postgres 460; Playwright 14 (474 automated).
 - Calibration labels are frozen by hash: a changed label is a new file, never an edit. Never change an evaluator
   to make the mutant or held-out numbers go up; that's what a new, unseen set is for.
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
-- The committed screenshots had drifted since Phases 4-6 (old nav, missing evaluators); all 15 were re-captured in part B.
-  When Playwright rewrites them, compare with the committed ones before deciding they changed (IDs/timestamps always do).
+- docs/screenshots/*.png (except the GitHub ci-gate-*.png) and docs/demo.gif are captured from the seeded demo by
+  scripts/demo-capture.ps1; the e2e suite no longer touches docs/.
 - A replay without overrides must call the adapter exactly as a run does (no `overrides` kwarg): the determinism test
   replays every case of 4 datasets and requires `diff.identical`.
 - The API image must install packages/sdk (agentforge_api.tracing imports agentforge_sdk.tracing); the venv
@@ -242,7 +255,7 @@ Read `README.md` (esp. "Current limitations") and `docs/architecture.md` before 
 Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README;
 C: evaluators @1.1.0 + calibration (dev / held-out / mutants), rescore, schema + Ollama-template fixes, measured estimator;
 D: answer_grounded, opt-in, 1.0.0 held-out + 1.1.0 in-sample).
-**Next: Phase 8.**
+**Phase 8 part A done** (README, demo seed, screenshots, GIF, docs/results.md). Next: the rest of Phase 8.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
    screenshots, tests), K8s manifests, MCP adapter, remaining dashboard pages (the Claude + Llama

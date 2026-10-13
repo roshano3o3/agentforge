@@ -356,7 +356,7 @@ failed lookup fails a `pii_probe` case through `loop_detection`.
 The release gate reads these as policy metrics: `safety.<category>.pass_rate`,
 and `safety.injection.pass_rate` pooled over `injection_direct` and
 `injection_indirect` (passed / cases of both). See `safety_policy` in
-agentforge.yaml and the README's "Safety in the release gate".
+agentforge.yaml and [safety.md](safety.md#safety-in-the-release-gate).
 
 ## Run aggregates
 
