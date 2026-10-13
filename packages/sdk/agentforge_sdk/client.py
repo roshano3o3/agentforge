@@ -50,6 +50,11 @@ class AgentForgeClient:
 
     # -- applications --------------------------------------------------
 
+    def list_applications(self) -> list[dict[str, Any]]:
+        resp = self._client.get("/applications")
+        _raise_for_status(resp)
+        return resp.json()
+
     def upsert_application(self, name: str, description: str | None = None) -> dict[str, Any]:
         resp = self._client.post("/applications", json={"name": name, "description": description})
         _raise_for_status(resp)

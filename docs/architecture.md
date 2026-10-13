@@ -1,32 +1,46 @@
-# Architecture — through Phase 7 and the benchmarks (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmarks)
+# Architecture — through Phase 8 part A (evaluation engine, trajectories, release gate, adversarial & safety testing, tracing & Trace Explorer, failure replay, LLM-agent benchmarks)
 
 This describes what is actually built, not the eventual full system (see
-the root README's "What's next" for later phases).
+the root README's Roadmap for later phases).
 
 ## Component diagram
 
 ```mermaid
 flowchart LR
-    subgraph Windows_host [Windows, native]
+    subgraph Host [Host]
         CLI[agentforge CLI]
-        WEB[Next.js dashboard\nnpm run dev]
+        BROWSER[Browser]
     end
 
     subgraph Linux_containers [Linux containers via Docker Compose, all ports on 127.0.0.1]
+        WEB[Next.js dashboard
+production build]
+        SEED[seed, one-shot
+agentforge demo seed]
         API[FastAPI]
         PG[(PostgreSQL)]
-        REDIS[(Redis\narq queue)]
-        WORKER[arq worker\nadapters + evaluators]
+        REDIS[(Redis
+arq queue)]
+        WORKER[arq worker
+adapters + evaluators]
         API --> PG
         API -->|enqueue run id| REDIS
         REDIS -->|job| WORKER
-        WORKER -->|results, agent steps,\nmetric scores, aggregates, status| PG
+        WORKER -->|results, agent steps,
+metric scores, aggregates, status| PG
+        SEED -->|HTTP, empty DB only| API
     end
 
+    BROWSER -->|page| WEB
+    BROWSER -->|HTTP: fetch from the page| API
     CLI -->|HTTP: create run, poll| API
-    WEB -->|HTTP: create run, poll| API
-    WORKER -.->|http adapter: POST| EXT[application under test\ne.g. host.docker.internal]
+    WORKER -.->|http adapter: POST| EXT[application under test
+e.g. host.docker.internal]
 ```
+
+The dashboard's pages call the API from the browser (`NEXT_PUBLIC_API_URL`, `http://127.0.0.1:8000`), so
+both ports are published on localhost. For development the dashboard can instead run natively with
+`next dev` (`scripts/dev-web.ps1`, after `docker compose stop web`).
 
 The API never executes adapters or evaluators; it validates, persists, and
 enqueues. The worker is the **only** place an adapter or evaluator runs, and
@@ -343,7 +357,7 @@ Postgres via Docker Compose is the intended setup, and a local SQLite file
 (`apps/api/agentforge_dev.db`, via `aiosqlite`) is a same-code-path
 fallback for running without Docker. Both are verified: the full Python and
 Playwright suites pass on each (`test.ps1` / `test-ui.ps1`, with
-`-Postgres` for the Docker path — see the README's Testing section).
+`-Postgres` for the Docker path — see [testing.md](testing.md)).
 
 Differences found by actually running on Postgres (all in the migrations,
 none in the ORM or API code):
@@ -400,8 +414,7 @@ explicit rejection. Added:
 
 No domain model changes beyond `DatasetVersion.status` — no `Project`
 entity was added. "Applications" in the UI *is* the `Application` model; a
-real `Project` wrapper above it is explicitly deferred (see README "Current
-limitations") rather than added as a zero-behavior pass-through entity.
+real `Project` wrapper above it is explicitly deferred (see [limitations.md](limitations.md)) rather than added as a zero-behavior pass-through entity.
 
 ### DB-level enforcement: a real trigger, not just a service-layer check
 
@@ -488,4 +501,4 @@ Two more operational findings from getting this running:
 ## Not implemented yet
 
 LLM-as-judge evaluators, authentication. The model comparison has been run
-once (README "Benchmarks: real LLM agents"). See the root README.
+once ([benchmarks.md](benchmarks.md)). See the root README.
