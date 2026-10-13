@@ -42,7 +42,32 @@ Before Phase 8 there was no `docker compose up` path to a working demo at all. T
 
 ## Fresh clone from GitHub
 
-FRESH_GITHUB
+Measured **2026-10-13**, right after Phase 8 part B was merged (`main` = `5f95005`), on Windows 11 with Docker Desktop and no API keys. The steps followed the README Quick Start exactly:
+
+1. Clone into an empty folder: `git clone https://github.com/roshano3o3/agentforge.git`.
+2. `cd agentforge`.
+3. `cp .env.example .env`.
+4. `docker compose up`.
+
+There was one deviation: `COMPOSE_PROJECT_NAME=agentforge-gh` was set. The folder name `agentforge` is also this machine's development stack's Compose project, so without it Compose would have reused that stack's non-empty database volume, and the seed would correctly have done nothing. A new machine has no such volume.
+
+**Result: worked first try.**
+
+- **Images:** all four were built from the clone (the Docker layer cache on this machine was available).
+- **Services:** Postgres, Redis, the API, the worker and the dashboard came up.
+- **Seed:** loaded the demo and exited 0, with the same results as every earlier seed.
+- **API:** `GET /health` returned `{"status":"ok"}`, and `GET /runs` held 7 runs, all `completed`.
+- **Browser:** headless Chromium on the dashboard's `/runs` rendered 7 run rows, and `/regression` rendered.
+
+The stack was removed afterwards (`docker compose down -v`).
+
+| Seeded run (GitHub clone) | Result | Run id |
+|---|---|---|
+| `rag-assistant@v1` on `rag-support` | 2/5 | `9bc70310` |
+| `invoice-agent@v1`, trajectory / safety | 10/10 / 35/35 | `6aa2b428` / `6f60f1e3` |
+| `invoice-agent@v2`, trajectory / safety | 4/10, gate FAILED 3 of 8 / 15/35, gate FAILED 4 of 11 | `85f4e7e4` / `8594fb32` |
+| `invoice-agent@pr4-d2-off`, trajectory / safety | 10/10, gate PASSED 8 of 8 / 31/35, gate FAILED 9 of 11 | `ce697c39` / `86edb692` |
+| Replay of PR #4's injection case with `d2=on` | FAIL → PASS | replay `3bcf2f55` |
 
 ## Kubernetes (kind)
 
@@ -52,7 +77,7 @@ The [`.github/workflows/k8s.yml`](../.github/workflows/k8s.yml) workflow runs [`
 |---|---|---|
 | Local (Windows 11, Docker Desktop, kind v0.27.0), 2026-10-13 | `7aea8b1` + manifests (the script's first run failed only on a quoting bug in its own Python check, after the stack and seed had succeeded) | **OK**: all pods ready (api 1, worker 2, web 1, postgres 1, redis 1); the seed Job printed the same results as the Compose seed (v1 10/10 and 35/35, v2 4/10 and 15/35 with gates FAILED 3 of 8 and 4 of 11, PR #4 agent 10/10 PASSED 8 of 8 and 31/35 FAILED 9 of 11, replay FAIL → PASS); 7/7 runs completed; `/health` ok; dashboard 200 |
 | GitHub Actions, branch `phase8-final`, 2026-10-13 | `028d99b` | **success**: [run 38438286965](https://github.com/roshano3o3/agentforge/actions/runs/38438286965) |
-| GitHub Actions, `main` | KIND_MAIN |
+| GitHub Actions, `main` (the Part B merge) | `5f95005` | **success**: [run 38443770586](https://github.com/roshano3o3/agentforge/actions/runs/38443770586) |
 
 ## MCP parity
 
@@ -162,4 +187,4 @@ The README's "484 automated tests" is 470 Python (the Postgres run, which runs e
 
 CI runs the same suites on every push ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), plus the kind deployment ([`.github/workflows/k8s.yml`](../.github/workflows/k8s.yml)).
 
-CI_MAIN
+On `main` at the Part B merge (`5f95005`): CI **success** ([run 38443770534](https://github.com/roshano3o3/agentforge/actions/runs/38443770534)): lint, Python (Postgres + SQLite), browser. Kubernetes (kind) **success** ([run 38443770586](https://github.com/roshano3o3/agentforge/actions/runs/38443770586)).
