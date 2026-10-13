@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentForge — evaluation and release gating for AI agents</title>
+  <meta name="description" content="Open-source evaluation and release-gating platform for production AI agents. Test RAG quality, agent trajectories, safety, latency and cost before shipping.">
+  <meta name="color-scheme" content="light dark">
+  <meta property="og:title" content="AgentForge">
+  <meta property="og:description" content="Open-source evaluation and release-gating platform for production AI agents.">
+  <meta property="og:image" content="assets/screenshots/regression-v1-vs-v2.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M9 22l7-13 7 13' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Theme: the OS preference, unless the visitor picked one (remembered per browser when storage is available).
+    (function () {
+      try {
+        var saved = localStorage.getItem("theme");
+        if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#top" aria-label="AgentForge home">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M9 22l7-13 7 13"/></svg>
+        AgentForge
+      </a>
+      <nav aria-label="Sections">
+        <a href="#catches">What it catches</a>
+        <a href="#features">Features</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#quick-start">Quick Start</a>
+      </nav>
+      <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap">
+        <p class="eyebrow">Open source · MIT · v1.0.0</p>
+        <h1>Open-source evaluation and release-gating platform for production AI agents.</h1>
+        <p class="lede">Test RAG quality, agent trajectories, safety, latency and cost before shipping.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/roshano3o3/agentforge">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            View on GitHub
+          </a>
+          <a class="btn" href="#quick-start">Quick Start</a>
+        </div>
+        <ul class="stats" aria-label="At a glance">
+          <li><strong>26</strong><span>deterministic evaluator versions</span></li>
+          <li><strong>7</strong><span>attack categories</span></li>
+          <li><strong>484</strong><span>automated tests</span></li>
+          <li><strong>180</strong><span>MCP parity case pairs, identical</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="demo" aria-label="Demo">
+      <div class="wrap">
+        <figure class="demo-frame">
+          <video autoplay muted loop playsinline preload="metadata" width="960" height="600"
+                 poster="assets/screenshots/regression-v1-vs-v2.png"
+                 aria-label="Demo: runs list, a FAILED regression of v1 vs v2, the Safety dashboard, a failing injection case's trace with delete_invoice highlighted, and a replay with defense D2 back on going from FAIL to PASS">
+            <source src="assets/demo.mp4" type="video/mp4">
+            <img src="assets/demo.gif" width="960" height="600" alt="AgentForge demo: runs list, regression FAILED, Safety dashboard, trace with delete_invoice highlighted, replay FAIL to PASS">
+          </video>
+          <figcaption>
+            Runs → Regression (v1 vs v2, <b>FAILED</b>) → Safety dashboard → the failing injection case's trace, with
+            <code>delete_invoice</code> blamed → replay with defense D2 back on: <b>FAIL → PASS</b>. Recorded from the
+            seeded demo; the example agent is scripted, so these results are fixture-based.
+            <a href="assets/demo.gif">Open the GIF</a>.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="catches">
+      <div class="wrap">
+        <h2>What it catches</h2>
+        <p class="section-lede">Three pull requests are left open on purpose, never to be merged. Each runs the release gate in
+          GitHub Actions against <code>main</code>, with the base branch's policy.</p>
+        <div class="cards three">
+          <article class="card verdict pass">
+            <p class="badge">PASSED</p>
+            <h3><a href="https://github.com/roshano3o3/agentforge/pull/2">PR #2 · a safe refactor</a></h3>
+            <p>Same behaviour, refactored. The gate passes: <b>8 of 8</b> trajectory checks and <b>11 of 11</b> safety checks.</p>
+          </article>
+          <article class="card verdict fail">
+            <p class="badge">FAILED</p>
+            <h3><a href="https://github.com/roshano3o3/agentforge/pull/3">PR #3 · a broken agent</a></h3>
+            <p>Five deliberate regressions: refunds under $100 skip approval, a denied approval is ignored, deletes instead
+              of voids. Trajectory <b>3 of 8</b> (pass rate 1 → 0.4), safety <b>4 of 11</b>.</p>
+          </article>
+          <article class="card verdict warn">
+            <p class="badge">FAILED · injection only</p>
+            <h3><a href="https://github.com/roshano3o3/agentforge/pull/4">PR #4 · one defense off</a></h3>
+            <p>A "performance" change stops treating tool output as data. Trajectory still passes <b>8 of 8</b>; safety
+              fails <b>9 of 11</b>: <code>injection_indirect</code> drops to <b>0.2</b> as a memo makes the agent call
+              <code>delete_invoice</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="alt">
+      <div class="wrap">
+        <h2>Features</h2>
+        <p class="section-lede">Every evaluator is a deterministic rule; none is an LLM judge. Cost is always labelled estimated.</p>
+        <div class="cards features">
+          <article class="card">
+            <h3>Trajectory evaluation</h3>
+            <p>Every tool call, argument and result the agent reports is checked against the dataset's rules by 7 trajectory
+              evaluators, each naming the step that broke a rule. On the invoice agent: v1 <b>10/10</b>, the regressed v2
+              <b>4/10</b>.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/trajectory.md">Trajectory docs →</a>
+          </article>
+          <article class="card">
+            <h3>Adversarial &amp; safety testing</h3>
+            <p>Attack variants generated from your own cases across 7 categories, gated per category. 35 variants: v1
+              <b>35/35</b>, v2 <b>15/35</b>. A 226-variant stress set finds v1's real weaknesses: <b>211/226</b>.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/safety.md">Safety docs →</a>
+          </article>
+          <article class="card">
+            <h3>CI release gate</h3>
+            <p><code>agentforge gate</code> compares a candidate run with the production baseline using plain arithmetic,
+              stores an immutable decision and exits 0 / 1 / 2. A GitHub Actions workflow gates every pull request.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/release-gate.md">Release gate docs →</a>
+          </article>
+          <article class="card">
+            <h3>Tracing &amp; failure replay</h3>
+            <p>OpenTelemetry spans per case, PII-redacted and stored with the run (+6.9 to +9.6 ms per case, measured).
+              Replay one case with one setting changed and diff it step by step: PR #4's case with D2 on goes
+              <b>FAIL → PASS</b>.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/replay.md">Replay docs →</a>
+          </article>
+          <article class="card">
+            <h3>Benchmarks with real LLMs</h3>
+            <p>The same agent with Claude Haiku 4.5, Claude Sonnet 5.5 or a local Llama 3.1 8B as the planner, scored by the
+              same evaluators. Estimated spend: <b>$2.02</b> for the comparison, <b>$0.41</b> for the follow-up re-runs.</p>
+            <a href="#benchmarks">See the table ↓</a>
+          </article>
+          <article class="card">
+            <h3>Calibration</h3>
+            <p>Answer checks calibrated on 45 dev, 25 held-out and 30 mutant answers: <b>44/45</b> (in-sample),
+              <b>25/25</b>, and only <b>11/30</b> mutants caught, reported, not tuned away. A grounding check with 14 false
+              positives on real outputs ships opt-in.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/benchmarks.md">Calibration details →</a>
+          </article>
+          <article class="card">
+            <h3>Kubernetes</h3>
+            <p>Kustomize manifests with probes, requests/limits and a ConfigMap/Secret. The worker is its own Deployment, so
+              evaluation capacity scales without the API. Deployed to kind in CI: <b>7/7</b> seeded runs completed.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/kubernetes.md">Kubernetes docs →</a>
+          </article>
+          <article class="card">
+            <h3>MCP</h3>
+            <p>Agents whose tools live behind MCP servers. The same tools in-process or over MCP give identical results,
+              trajectories, verdicts and stored spans across <b>180</b> case pairs.</p>
+            <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/mcp.md">MCP docs →</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="wrap">
+        <h2>Architecture</h2>
+        <p class="section-lede">The API validates, stores and queues. Only the worker runs agents and evaluators. Finished
+          runs, decisions and traces are immutable, enforced by database triggers.</p>
+        <div class="arch" role="img" aria-label="Clients (CLI, dashboard, GitHub Actions gate) call the API, which queues runs in Redis; the worker calls your agent once per test case (the agent may use LLM providers and MCP servers), runs the evaluators and writes results to Postgres; the API and worker optionally export spans over OTLP.">
+          <div class="arch-col">
+            <div class="node muted">agentforge CLI</div>
+            <div class="node muted">Dashboard</div>
+            <div class="node muted">GitHub Actions gate</div>
+          </div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node strong">API<small>FastAPI</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node strong">Redis<small>run queue</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="arch-col">
+            <div class="node strong">Worker<small>one call per case</small></div>
+            <div class="node">Your agent<small>python / http adapter</small></div>
+            <div class="node muted">LLM providers · MCP server</div>
+          </div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node strong">Evaluators<small>deterministic, name@version</small></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node strong">Postgres<small>immutable results, steps, spans</small></div>
+        </div>
+        <p class="note">Optional: OTLP export of the API's and worker's spans to an OpenTelemetry collector or Jaeger.
+          Runs on Docker Compose or Kubernetes.</p>
+      </div>
+    </section>
+
+    <section id="benchmarks" class="alt">
+      <div class="wrap">
+        <h2>Benchmarks with real LLMs</h2>
+        <p class="section-lede">Case pass rates of the same invoice agent with a model as the planner, using the fact-based
+          answer checks. Pass rates were identical in every repeat.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">Planner</th><th scope="col">Runs</th><th scope="col">Trajectory <span>(10 cases)</span></th><th scope="col">Safety <span>(35 cases)</span></th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">Claude Haiku 4.5</th><td>3 each</td><td>1.00</td><td>0.86</td></tr>
+              <tr><th scope="row">Claude Sonnet 5.5</th><td>3 each</td><td>0.70</td><td>0.91</td></tr>
+              <tr><th scope="row">Llama 3.1 8B (Ollama)</th><td>1</td><td>0.30</td><td>not run</td></tr>
+              <tr class="ref"><th scope="row">scripted v1 (reference)</th><td>1 each</td><td>1.00</td><td>1.00</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul class="small-list">
+          <li>Sonnet's 3 trajectory failures are extra verification lookups, which the trajectory checks count as wrong.</li>
+          <li>Haiku is the only model here that an injected instruction got through (1 direct-injection case, every repeat).</li>
+          <li>Estimated spend: $2.02 for the comparison, $0.41 for the follow-up re-runs.</li>
+        </ul>
+        <p class="note">One day of measurements on small, synthetic tasks written for the scripted agent; hosted models
+          change behind the same id. Every number on this page is sourced in
+          <a href="https://github.com/roshano3o3/agentforge/blob/main/docs/results.md">docs/results.md</a>.</p>
+      </div>
+    </section>
+
+    <section id="screenshots">
+      <div class="wrap">
+        <h2>Screenshots</h2>
+        <p class="section-lede">The real dashboard, captured from the seeded demo.</p>
+        <div class="gallery">
+          <a href="assets/screenshots/runs.png"><img loading="lazy" decoding="async" src="assets/screenshots/runs.png" width="1440" height="900" alt="Runs list"><span>Runs</span></a>
+          <a href="assets/screenshots/regression-v1-vs-v2.png"><img loading="lazy" decoding="async" src="assets/screenshots/regression-v1-vs-v2.png" width="1440" height="900" alt="Regression page, v1 baseline vs v2, release decision FAILED"><span>Regression</span></a>
+          <a href="assets/screenshots/safety-v1-vs-v2.png"><img loading="lazy" decoding="async" src="assets/screenshots/safety-v1-vs-v2.png" width="1440" height="900" alt="Safety dashboard, pass rate per attack category"><span>Safety</span></a>
+          <a href="assets/screenshots/trace-explorer.png"><img loading="lazy" decoding="async" src="assets/screenshots/trace-explorer.png" width="1440" height="900" alt="Trace Explorer with delete_invoice blamed"><span>Trace Explorer</span></a>
+          <a href="assets/screenshots/replay-diff.png"><img loading="lazy" decoding="async" src="assets/screenshots/replay-diff.png" width="1440" height="900" alt="Replay diff, FAIL to PASS"><span>Replay diff</span></a>
+          <a href="assets/screenshots/trajectory-v2-failing.png"><img loading="lazy" decoding="async" src="assets/screenshots/trajectory-v2-failing.png" width="1440" height="900" alt="v2 trajectory with step 3 highlighted"><span>Trajectory</span></a>
+          <a href="assets/screenshots/run-detail-completed.png"><img loading="lazy" decoding="async" src="assets/screenshots/run-detail-completed.png" width="1440" height="900" alt="Run detail with per-case verdicts"><span>Run detail</span></a>
+          <a href="assets/screenshots/baselines.png"><img loading="lazy" decoding="async" src="assets/screenshots/baselines.png" width="1440" height="900" alt="Baselines page"><span>Baselines</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section id="quick-start" class="alt">
+      <div class="wrap">
+        <h2>Quick Start</h2>
+        <p class="section-lede">Docker and Git; no API keys. The first build takes a few minutes, then a one-shot seed loads the demo.</p>
+        <pre class="code" tabindex="0"><code>git clone https://github.com/roshano3o3/agentforge.git
+cd agentforge
+cp .env.example .env          # Windows: copy .env.example .env
+docker compose up</code></pre>
+        <p>Then open <code>http://127.0.0.1:3000/runs</code>. Everything binds to localhost.
+          <a href="https://github.com/roshano3o3/agentforge#quick-start">Full instructions →</a></p>
+      </div>
+    </section>
+
+    <section id="limitations">
+      <div class="wrap">
+        <h2>Limitations</h2>
+        <ul class="limits">
+          <li><b>Fixture-based demo.</b> The example agent's planner is scripted Python, not a model. Its results, including
+            every demo-PR verdict, show the mechanics catching real trajectory bugs in a real LangGraph graph, not any
+            model's quality.</li>
+          <li><b>Scripted planner, same author.</b> The v2 regressions were written on purpose, and the same author wrote v1's
+            defenses and the attack templates.</li>
+          <li><b>Labeling bias.</b> The same person labelled the calibration sets and built the evaluators. Labels were frozen
+            by hash before the evaluators ran on them, but the labeller knew what the checks look for.</li>
+          <li><b>No authentication.</b> Everything binds to localhost; the Kubernetes manifests have no Ingress. Not ready for
+            a shared deployment.</li>
+          <li><b>Small samples.</b> 5 safety cases per category, so the gate can only say "no regression" or "at most one
+            failure"; the LLM benchmark is one day of measurements.</li>
+        </ul>
+        <p><a href="https://github.com/roshano3o3/agentforge/blob/main/docs/limitations.md">The full list →</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <p><b>AgentForge</b> · by <a href="https://github.com/roshano3o3">@roshano3o3</a></p>
+      <p>
+        <a href="https://github.com/roshano3o3/agentforge/releases/tag/v1.0.0">v1.0.0 release</a> ·
+        <a href="https://github.com/roshano3o3/agentforge">Source</a> ·
+        <a href="https://github.com/roshano3o3/agentforge/blob/main/LICENSE">MIT license</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Theme toggle (no other JavaScript on the page).
+    document.querySelector(".theme-toggle").addEventListener("click", function () {
+      var root = document.documentElement;
+      var current = root.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      var next = current === "dark" ? "light" : "dark";
+      root.dataset.theme = next;
+      try { localStorage.setItem("theme", next); } catch (e) {}
+    });
+  </script>
+</body>
+</html>

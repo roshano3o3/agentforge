@@ -23,3 +23,6 @@ Thumbs.db
 
 # Scratch for the CI release gate (scripts/ci-gate.sh) and local one-off worker images.
 .gate/
+
+# Landing page build output (site/build.sh)
+site/_dist/

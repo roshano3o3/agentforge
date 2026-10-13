@@ -4,6 +4,8 @@
 
 **Open-source evaluation and release-gating platform for production AI agents. Test RAG quality, agent trajectories, safety, latency and cost before shipping.**
 
+**Website: [roshano3o3.github.io/agentforge](https://roshano3o3.github.io/agentforge/)** · [v1.0.0 release](https://github.com/roshano3o3/agentforge/releases/tag/v1.0.0)
+
 ![AgentForge demo: runs list, a FAILED regression of v1 vs v2, the Safety dashboard, a failing injection case's trace with delete_invoice highlighted, and a replay with defense D2 back on going from FAIL to PASS](docs/demo.gif)
 
 *Recorded from the seeded demo (`docker compose up`) by [`apps/web/demo/capture.spec.ts`](apps/web/demo/capture.spec.ts); regenerate with [`scripts/demo-capture.ps1`](scripts/demo-capture.ps1). The example agent is scripted, so its results are fixture-based (see [Limitations](#limitations)).*
