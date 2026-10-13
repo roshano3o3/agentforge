@@ -1040,7 +1040,9 @@ def demo_seed(
                 console.print("The database already has data; the demo seed loads only into an empty one.")
                 return
             console.print(f"Seeding the demo from {root.resolve()} through {api_url}")
-            demo.seed(client, root, lambda line: console.print(f"  {escape(line)}"), run_timeout=run_timeout)
+            demo.seed(
+                client, root, lambda line: console.print(f"  {escape(line)}", soft_wrap=True), run_timeout=run_timeout
+            )
         except Exception as exc:  # noqa: BLE001 - surface any API/worker error to the user
             console.print(f"[red]Demo seed failed:[/red] {escape(str(exc))}")
             raise typer.Exit(code=1) from None
