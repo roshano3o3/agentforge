@@ -65,7 +65,7 @@ Read `README.md`, `docs/limitations.md` and `docs/architecture.md` before changi
   relax to "Continue" around docker/npm and check `$LASTEXITCODE`. Don't edit text files with
   `Get-Content`/`Set-Content` (adds a BOM, can mangle UTF-8).
 
-## Current status (2026-10-13, Phase 8 part A on main: presentation + first-run experience)
+## Current status (2026-10-13): PROJECT COMPLETE, v1.0.0 (all phases 1-8 + benchmarks A-D on main)
 - **Phase 1 done**, Docker/Postgres verified.
 - **Phase 2 done**: worker + queue, python/http adapters, 9 evaluators, stored aggregates, run
   immutability triggers, CLI submit+poll, Runs list/detail UI with new-run form.
@@ -224,6 +224,39 @@ Read `README.md`, `docs/limitations.md` and `docs/architecture.md` before changi
   specs now write their screenshots to apps/web/test-results/screenshots, never docs/. GIF: ffmpeg via the pinned
   mwader/static-ffmpeg:7.1 image when no local ffmpeg; 64 colours keeps it < 10 MB. Node 20.9+ (Next.js 16).
   Tests: SQLite 438 + 22 skipped; Postgres 460; Playwright 14 (474 automated).
+- **Phase 8 part B done, merged to main, tagged v1.0.0** (2026-10-13): LICENSE (MIT) already existed.
+  **Kubernetes**: `deploy/k8s/` kustomize (ns agentforge; ConfigMap + Secret with the .env.example dev defaults; Postgres
+  StatefulSet+PVC; Redis; API 1 replica, Recreate, init container waits for Postgres (it migrates at start -> don't scale
+  it); **worker its own Deployment, 2 replicas** with probes `python -m agentforge_worker.healthcheck` (Redis PING +
+  Postgres SELECT 1 for THIS pod; arq --check is queue-wide); web; seed Job). Images built locally, tag :local, no registry.
+  `scripts/k8s-kind.sh` (build, kind create/load, apply, wait, check /health + 7 completed runs + dashboard) is what
+  `.github/workflows/k8s.yml` runs. No Ingress (no auth): port-forward. docs/kubernetes.md.
+  **MCP**: `invoice_agent.mcp_server` (low-level Server from the official SDK, mcp 2.3; publishes the in-process tools'
+  own JSON schemas; errors as structuredContent {error_type, message}) + `invoice_agent.mcp_client` (one connection per
+  process on its own event-loop thread; client-side pydantic model from the published schema so coercion matches;
+  re-raises the same exception type name). Adapter settings `tools` (in-process|mcp) + `mcp_server` (URL, empty = stdio
+  subprocess) on the scripted adapters AND answer_llm; scenario overrides + execute_tool spans wrap either transport the
+  same way (tools.tools_for(scenario, base)). The MCP SDK's own OTel spans run in the caller's context but are never
+  stored (collector keeps only STORED_SCOPES). Parity test (tests/integration/test_mcp_parity.py): 180 case pairs
+  identical except measured values and an error event's exception.stacktrace (the client's re-raise). docs/mcp.md.
+  Adding settings changed the pinned accepted-settings lists in test_replay*.py; `_run(behavior, input, scenario)` keeps
+  its 3-arg form (tests call it). Fresh clone from GitHub + Quick Start verified after the merge (docs/results.md).
+  Tests: SQLite 448 + 22 skipped; Postgres 470; Playwright 14 (484 automated).
+
+## Follow-ups (from the limits sections; none started)
+- Authentication (blocks any shared deployment, an Ingress, a public demo).
+- Kubernetes: migrations as a Job so the API can scale; runAsNonRoot users in the Dockerfiles; a queue-length worker
+  autoscaler; HA/managed Postgres; tested only on kind.
+- MCP: nested-object tool arguments in the client; collecting server-side spans; an adapter for arbitrary agents' servers.
+- `answer_grounded`: validate on fresh held-out REAL outputs before any default; its known "such as (...)" false positive.
+- Answer checks @1.1.0 miss unnamed wrong facts (11/30 mutants); calibration labeller = evaluator author (bias).
+- `tool_selection` penalizes extra verification reads (Sonnet's 3 trajectory failures) -- deliberately unchanged.
+- Safety: 5 cases per category (gate can only say "no regression"); templates, not an attacker; regex-only PII redaction.
+- Benchmarks: one day, small synthetic tasks; OpenAI models not run; Llama on a CPU-heavy laptop.
+- Statement-level immutability trigger to cut tracing overhead (~2.2 ms/case of the +7-10 ms).
+- An audited admin purge command (the part C dev cleanup bypassed the immutability triggers by hand).
+- A reusable GitHub Action instead of scripts/ci-gate.sh; HTTP adapters can't declare replay settings.
+
 - Calibration labels are frozen by hash: a changed label is a new file, never an edit. Never change an evaluator
   to make the mutant or held-out numbers go up; that's what a new, unseen set is for.
 - Never tune the LLM prompt to a benchmark number; the prompt's sha256 goes in every results JSON.
@@ -255,7 +288,7 @@ Read `README.md`, `docs/limitations.md` and `docs/architecture.md` before changi
 Benchmarks **done** (A: harness; B: real run of Sonnet 5.5 / Haiku 4.5 / Llama 3.1 8B, results JSON + README;
 C: evaluators @1.1.0 + calibration (dev / held-out / mutants), rescore, schema + Ollama-template fixes, measured estimator;
 D: answer_grounded, opt-in, 1.0.0 held-out + 1.1.0 in-sample).
-**Phase 8 part A done** (README, demo seed, screenshots, GIF, docs/results.md). Next: the rest of Phase 8.
+**Phase 8 done** (A: README, demo seed, screenshots, GIF, docs/results.md; B: Kubernetes + kind CI, MCP adapter + parity, v1.0.0 release). Project complete; see Follow-ups above.
 8. Polish & proof — README rewrite (tagline, 30-sec demo GIF, architecture diagram, Why AgentForge,
    metrics, trajectory eval, adversarial testing, CI/CD, failure replay, benchmarks, quick start, API,
    screenshots, tests), K8s manifests, MCP adapter, remaining dashboard pages (the Claude + Llama

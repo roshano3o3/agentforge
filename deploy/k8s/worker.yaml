@@ -1,0 +1,50 @@
+# The worker: the only place agents and evaluators run. A separate Deployment so it scales on its own:
+# `kubectl -n agentforge scale deployment/worker --replicas=N`. Each pod consumes the same Redis queue (arq) and
+# runs up to AGENTFORGE_WORKER_MAX_JOBS runs at a time; the API is unaffected by how many there are.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker
+    spec:
+      # On SIGTERM arq cancels the run in progress, which is marked failed ("worker stopped"), not resumed.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: agentforge/worker
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: agentforge-config}
+          env:
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: POSTGRES_PASSWORD}}
+            - name: AGENTFORGE_DATABASE_URL
+              value: postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: OPENAI_API_KEY}}
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: ANTHROPIC_API_KEY}}
+          # No HTTP port: the probe checks this pod's own dependencies (Redis PING + Postgres SELECT 1).
+          readinessProbe:
+            exec: {command: ["python", "-m", "agentforge_worker.healthcheck"]}
+            periodSeconds: 10
+            timeoutSeconds: 8
+          livenessProbe:
+            exec: {command: ["python", "-m", "agentforge_worker.healthcheck"]}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 8
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}

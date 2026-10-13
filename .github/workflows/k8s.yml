@@ -1,0 +1,36 @@
+# Deploys AgentForge to a throwaway kind cluster with deploy/k8s and checks the seeded demo works
+# (scripts/k8s-kind.sh: build images, apply, wait for every Deployment and the seed Job, check /health,
+# /runs and the dashboard). No secrets and no registry: the images are built here and loaded into kind.
+name: Kubernetes (kind)
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    name: Deploy to kind + seeded demo check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kind v0.27.0
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/kind
+          kind version
+          kubectl version --client
+
+      - name: Validate the manifests (kustomize build)
+        run: kubectl kustomize deploy/k8s > /dev/null
+
+      - name: Deploy and check
+        run: bash scripts/k8s-kind.sh

@@ -1,0 +1,15 @@
+# Non-secret configuration shared by the API, the worker and the seed Job (the same variables as docker-compose.yml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentforge-config
+data:
+  POSTGRES_DB: agentforge
+  POSTGRES_HOST: postgres
+  AGENTFORGE_REDIS_URL: redis://redis:6379/0
+  AGENTFORGE_TRACING: "on"
+  AGENTFORGE_TRACE_REDACTION: "on"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OLLAMA_BASE_URL: http://ollama:11434/v1
+  # A whole run must finish within this (seconds); arq cancels it otherwise and the run is marked failed.
+  AGENTFORGE_JOB_TIMEOUT_SECONDS: "3600"

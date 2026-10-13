@@ -29,6 +29,8 @@ Run `docker-up.ps1` first for the Docker modes. The test scripts rebuild the wor
 - **Browser** (`apps/web/e2e`): the dataset lifecycle (draft → edit → publish → locked with a real `409` → new version); **starting a run from the UI**, following it to `completed`, and checking per-case verdicts and reasons; and **trajectories**: start the invoice agent's v1 and v2 runs from the UI, open a case's timeline, check every step in order with nothing flagged (v1) and "show more" on a long result, then open v2's failing `refund-over-limit-001` and check that step 3 is highlighted red with the `approval_required` and `forbidden_tool_use` reasons beside it while step 2 (the denial) isn't. **Trace Explorer** (`trace-explorer.spec.ts`): from the Safety page's drill-down to PR #4's failing injection case's trace, `delete_invoice` and `evaluate injection_resisted` red with the reason, `get_invoice` not blamed, every span expandable, redacted values marked and no raw email anywhere on the page; reached from Run detail and Regression too; loading, error and "no trace" states.
 
 - **Demo seed** (`tests/unit/test_demo_seed.py`): against a fake API client, the seed publishes the three datasets, runs v1 / v2 / the PR #4 agent in order, points `production` at the v1 runs, gates every candidate with the repo's own policies, replays PR #4's failing case with `d2` on, refuses a non-empty database and stops on a failed run. The real thing (API, Docker worker, empty Postgres) is the fresh-clone Quick Start in [results.md](results.md#fresh-clone-quick-start).
+- **MCP** (`tests/integration/test_mcp_parity.py`, `tests/unit/test_mcp_tools.py`): v1, v2, the PR #4 agent and the LLM planner (fake provider) on every case of both invoice datasets, in-process vs over MCP (a stdio subprocess), through the real API and worker: identical results, steps, verdicts, stored span trees and offered tool schemas (180 case pairs; [mcp.md](mcp.md#parity-tested)); an unreachable MCP server fails each case with its name; the server's listing, results and error shapes over an in-process MCP connection; the client's argument coercion and error mapping.
+- **Worker probe** (`tests/unit/test_worker_healthcheck.py`): unreachable Redis and Postgres are both reported and exit 1. The healthy path gates the worker pods in the kind deployment (`scripts/k8s-kind.sh`, [kubernetes.md](kubernetes.md)).
 - **Demo capture** (`apps/web/demo/capture.spec.ts`, not part of the suite): drives the dashboard on a seeded stack to re-capture `docs/screenshots/` and the video behind `docs/demo.gif` (`scripts/demo-capture.ps1`).
 
 **Note:** Next.js's dev server holds a lock per project directory — stop `dev-web.ps1` before `test-ui.ps1`.
@@ -37,8 +39,8 @@ Last run in this environment, 2026-10-13 (Python 3.12.7, Windows 11, Docker Desk
 
 | Suite | Result |
 |---|---|
-| `test.ps1` (SQLite) | 438 passed, 22 skipped (trigger tests and worker e2e tests need Postgres/Docker) |
-| `test.ps1 -Postgres` | 460 passed |
+| `test.ps1` (SQLite) | 448 passed, 22 skipped (trigger tests and worker e2e tests need Postgres/Docker) |
+| `test.ps1 -Postgres` | 470 passed |
 | `test-ui.ps1` | 14 passed |
 | ruff check / ruff format --check / mypy / eslint / tsc | all clean |
 | CI (GitHub Actions, ubuntu: lint, python, browser jobs) | see the badge on the README |

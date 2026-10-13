@@ -47,6 +47,10 @@ enqueues. The worker is the **only** place an adapter or evaluator runs, and
 it runs only in a Linux container -- never natively on Windows (a standing
 project constraint). The CLI and dashboard only talk HTTP to the API.
 
+### On Kubernetes, and tools over MCP
+
+The same components run on Kubernetes from [`deploy/k8s/`](../deploy/k8s). The worker is its own Deployment, so evaluation capacity scales without touching the API. Details: [kubernetes.md](kubernetes.md). An agent's tools can also sit behind an MCP server: the invoice agent reaches the same tools in-process or over MCP, and the evaluation is identical either way ([mcp.md](mcp.md)).
+
 ## Run lifecycle and state machine
 
 ```

@@ -40,6 +40,32 @@ Before Phase 8 there was no `docker compose up` path to a working demo at all. T
 | PR #4 agent, safety | 31/35; gate **FAILED**, 9 of 11 | `33eb6044` |
 | Replay of `injection_indirect.memo-delete@get_invoice.contact-lookup-001` with `d2=on` | **FAIL → PASS** | replay `db4bfafa` |
 
+## Fresh clone from GitHub
+
+FRESH_GITHUB
+
+## Kubernetes (kind)
+
+The [`.github/workflows/k8s.yml`](../.github/workflows/k8s.yml) workflow runs [`scripts/k8s-kind.sh`](../scripts/k8s-kind.sh). It builds the four images, creates a kind v0.27.0 cluster, applies `deploy/k8s` and waits for every Deployment and the seed Job. Then it checks `/health` and that `/runs` holds 7 completed runs, and that the dashboard's `/runs` returns 200.
+
+| Where | Commit | Result |
+|---|---|---|
+| Local (Windows 11, Docker Desktop, kind v0.27.0), 2026-10-13 | `7aea8b1` + manifests (the script's first run failed only on a quoting bug in its own Python check, after the stack and seed had succeeded) | **OK**: all pods ready (api 1, worker 2, web 1, postgres 1, redis 1); the seed Job printed the same results as the Compose seed (v1 10/10 and 35/35, v2 4/10 and 15/35 with gates FAILED 3 of 8 and 4 of 11, PR #4 agent 10/10 PASSED 8 of 8 and 31/35 FAILED 9 of 11, replay FAIL → PASS); 7/7 runs completed; `/health` ok; dashboard 200 |
+| GitHub Actions, branch `phase8-final`, 2026-10-13 | `028d99b` | **success**: [run 38438286965](https://github.com/roshano3o3/agentforge/actions/runs/38438286965) |
+| GitHub Actions, `main` | KIND_MAIN |
+
+## MCP parity
+
+[`tests/integration/test_mcp_parity.py`](../tests/integration/test_mcp_parity.py) was run 2026-10-13 on SQLite and in the Postgres suite. It covers four agents (the scripted planner as v1, v2 and v1 without D2, plus the LLM planner with a fake provider). Each agent runs every case of the trajectory dataset (10) and the safety dataset (35) in-process and over MCP (a stdio subprocess), through the real API and worker.
+
+| Claim in the README | Value |
+|---|---|
+| Case pairs compared | **180** (4 agents × 45 cases) |
+| Identical | result status, verdict, answer, tokens, model; every step (tool, args, result or error, output); every evaluator's version, score, value, verdict, reason, evidence; the stored span tree (names, nesting, attributes, status, events); and, for the LLM planner, the tool schemas offered to the model on every turn |
+| Not compared | measured values (timings, ids, the latency evaluator's value and reason) and an error event's `exception.stacktrace`, which over MCP shows the client re-raising the server's error. `exception.type` and `exception.message` are compared and identical. |
+| Result | **4 passed** (plus the unreachable-server test); [`tests/unit/test_mcp_tools.py`](../tests/unit/test_mcp_tools.py) 4 passed |
+| Found on the way | Before excluding them, the only differences were exactly these. The latency evaluator's reason was 25 ms in-process vs 3,164 ms for the first MCP case (which includes launching the server). The stack trace is the client's re-raise. |
+
 ## Demo GIF and screenshots
 
 | Claim | Value | Source |
@@ -120,13 +146,20 @@ The labels are frozen by hash in `tests/unit/test_calibration.py`.
 
 ## Tests
 
-Run **2026-10-13** on branch `phase8-polish` (Windows 11, Python 3.12.7, Docker Desktop):
+Run **2026-10-13** on branch `phase8-final` (Windows 11, Python 3.12.7, Docker Desktop), before the merge:
 
 | Suite | Result |
 |---|---|
-| `scripts/test.ps1 -Postgres` (Python against Postgres + Redis + a worker container) | **460 passed** |
-| `scripts/test.ps1` (Python on SQLite) | 438 passed, 22 skipped (the trigger tests and worker end-to-end tests need Postgres/Docker) |
+| `scripts/test.ps1 -Postgres` (Python against Postgres + Redis + a worker container) | **470 passed** |
+| `scripts/test.ps1` (Python on SQLite) | 448 passed, 22 skipped (the trigger tests and worker end-to-end tests need Postgres/Docker) |
 | `scripts/test-ui.ps1` (Playwright) | **14 passed** |
 
-The README's "474 automated tests" is 460 Python (the Postgres run, which runs every Python test) + 14 Playwright. CI runs the same suites on every push: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). The CI run on the merged `main` is recorded in the commit's checks.
+The README's "484 automated tests" is 470 Python (the Postgres run, which runs every Python test) + 14 Playwright. Since Phase 8 part A (460 + 14), the new tests are:
 
+- MCP parity: 5, in `tests/integration/test_mcp_parity.py`.
+- The MCP server and client: 4, in `tests/unit/test_mcp_tools.py`.
+- The worker probe: 1, in `tests/unit/test_worker_healthcheck.py`.
+
+CI runs the same suites on every push ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), plus the kind deployment ([`.github/workflows/k8s.yml`](../.github/workflows/k8s.yml)).
+
+CI_MAIN

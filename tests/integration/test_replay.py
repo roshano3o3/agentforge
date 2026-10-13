@@ -207,7 +207,10 @@ async def test_replay_without_overrides_reproduces_every_case(run, replay, file:
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"temperature": 0.2}, "unknown setting 'temperature' (accepted: behavior, d1, d2, d3, d4, d5)"),
+        (
+            {"temperature": 0.2},
+            "unknown setting 'temperature' (accepted: behavior, d1, d2, d3, d4, d5, mcp_server, tools)",
+        ),
         # What --prompt-file sends: the invoice agent's planner is scripted, so it declares no prompt.
         ({"prompt": "You are a careful billing agent."}, "unknown setting 'prompt'"),
         ({"d2": "maybe"}, "'d2' must be on/off (true/false), got 'maybe'"),
@@ -224,7 +227,16 @@ async def test_overrides_the_adapter_did_not_declare_are_rejected(
     detail = resp.json()["detail"]
     assert detail["message"].startswith("overrides rejected: adapter 'invoice_agent.adapter:answer_v1_without_d2':")
     assert message in detail["message"]
-    assert [s["name"] for s in detail["accepted_settings"]] == ["behavior", "d1", "d2", "d3", "d4", "d5"]
+    assert [s["name"] for s in detail["accepted_settings"]] == [
+        "behavior",
+        "d1",
+        "d2",
+        "d3",
+        "d4",
+        "d5",
+        "tools",
+        "mcp_server",
+    ]
     # Nothing was created or queued, and the original is untouched.
     assert queue.enqueued_replays == []
     assert (await client.get(f"/results/{original['id']}/replays")).json() == []
@@ -256,7 +268,10 @@ async def test_the_worker_checks_overrides_again(
     assert await execute_replay(session_factory, bad.id) == "failed"
     r = (await client.get(f"/replays/{bad.id}")).json()
     assert r["error_message"].startswith("overrides rejected: adapter 'invoice_agent.adapter:answer_v1_without_d2':")
-    assert "unknown setting 'temperature' (accepted: behavior, d1, d2, d3, d4, d5)" in r["error_message"]
+    assert (
+        "unknown setting 'temperature' (accepted: behavior, d1, d2, d3, d4, d5, mcp_server, tools)"
+        in r["error_message"]
+    )
     assert r["steps"] == [] and r["metrics"] == [] and r["diff"] is None and r["result_status"] is None
     [worker_span] = r["spans"]  # no API span (it bypassed the API); the agent never ran
     assert worker_span["name"] == "agentforge.replay" and worker_span["children"] == []
@@ -278,6 +293,8 @@ async def test_replay_options_are_recorded_with_the_run(run, client: AsyncClient
         "d3": True,
         "d4": True,
         "d5": True,
+        "tools": "in-process",  # where the tools run (in-process or over MCP); not a behavior change
+        "mcp_server": "",
     }
 
     rag = await run("rag_support_v1.yaml", "rag_app.adapter:answer")

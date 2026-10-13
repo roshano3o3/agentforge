@@ -54,6 +54,7 @@ MAX_MODEL_TURNS = 12
 RECURSION_LIMIT = 2 * MAX_MODEL_TURNS + 4
 USAGE_KEY = "agentforge_usage"
 NATIVE_KEY = "agentforge_native"
+MCP_SCHEMA_KEY = "agentforge_mcp_input_schema"  # = mcp_client.MCP_SCHEMA_KEY (not imported: the SDK is optional)
 
 
 def builtin_prompt() -> str:
@@ -110,9 +111,14 @@ def system_prompt(base: str, defenses: Defenses, user: User) -> str:
 
 
 def tool_schemas(tools: Sequence[BaseTool]) -> list[dict[str, Any]]:
-    """Name, description and JSON-schema parameters of each tool, from its own signature."""
+    """Name, description and JSON-schema parameters of each tool: from its own signature, or for a tool reached
+    over MCP, the input schema its server published (mcp_client.py)."""
     out = []
     for t in tools:
+        published = (t.metadata or {}).get(MCP_SCHEMA_KEY)
+        if published is not None:
+            out.append({"name": t.name, "description": t.description, "parameters": published})
+            continue
         fn = convert_to_openai_tool(t)["function"]
         out.append({"name": fn["name"], "description": fn.get("description", ""), "parameters": fn["parameters"]})
     return out
@@ -178,9 +184,11 @@ def build_llm_graph(
     defenses: Defenses,
     base_prompt: str,
     scenario: Mapping[str, Any] | None = None,
+    tools: Sequence[BaseTool] | None = None,
 ) -> CompiledStateGraph:
+    """`tools`: the base tools (default in-process; see tools.base_tools for MCP)."""
     user = User.from_scenario(scenario)
-    all_tools = tools_for(scenario)
+    all_tools = tools_for(scenario, tools)
     guarded = defenses.d3 and user.allowed_tools is not None
     offered = [t for t in all_tools if not guarded or t.name in (user.allowed_tools or ())]
     executable = (

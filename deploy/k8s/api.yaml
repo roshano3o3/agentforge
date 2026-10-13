@@ -1,0 +1,78 @@
+# The API: validates, stores and queues; never runs agents or evaluators. One replica: it applies the database
+# migrations at start (`alembic upgrade head`), and two pods starting together would race on them. Scaling the
+# API out needs migrations moved to a Job first (docs/kubernetes.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # never two migrating pods at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: agentforge/api
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import socket, time
+              for _ in range(120):
+                  try:
+                      socket.create_connection(("postgres", 5432), timeout=2).close(); break
+                  except OSError:
+                      time.sleep(2)
+              else:
+                  raise SystemExit("postgres:5432 unreachable")
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+      containers:
+        - name: api
+          image: agentforge/api
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: {name: agentforge-config}
+          env:
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: agentforge-secrets, key: POSTGRES_PASSWORD}}
+            - name: AGENTFORGE_DATABASE_URL
+              value: postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}

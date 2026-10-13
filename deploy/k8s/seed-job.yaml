@@ -1,0 +1,33 @@
+# One-shot: `agentforge demo seed` loads the demo through the API (executed by the workers). It loads only into an
+# EMPTY database, so re-running the Job against a seeded database does nothing and still succeeds.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: seed
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: agentforge/seed
+          imagePullPolicy: IfNotPresent
+          command:
+            - agentforge
+            - demo
+            - seed
+            - --root
+            - /app
+            - --api-url
+            - http://api:8000
+            - --wait-for-api
+            - "300"
+            - --run-timeout
+            - "600"
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}

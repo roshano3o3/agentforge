@@ -61,6 +61,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -548,10 +549,13 @@ def _tool_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def build_graph(behavior: Behavior, scenario: Mapping[str, Any] | None = None) -> CompiledStateGraph:
+def build_graph(
+    behavior: Behavior, scenario: Mapping[str, Any] | None = None, tools: Sequence[BaseTool] | None = None
+) -> CompiledStateGraph:
     """The agent for one behavior, in the environment a case's scenario sets
     up (mock tool overrides, the session user). The planner never sees the
-    scenario itself: only tool results and the user's permissions."""
+    scenario itself: only tool results and the user's permissions. `tools`:
+    the base tools (default in-process; tools.base_tools for MCP)."""
     user = User.from_scenario(scenario)
 
     def agent(state: MessagesState) -> dict[str, list[BaseMessage]]:
@@ -589,7 +593,7 @@ def build_graph(behavior: Behavior, scenario: Mapping[str, Any] | None = None) -
 
     graph = StateGraph(MessagesState)
     graph.add_node("agent", agent)
-    graph.add_node("tools", ToolNode(tools_for(scenario), handle_tool_errors=_tool_error))
+    graph.add_node("tools", ToolNode(tools_for(scenario, tools), handle_tool_errors=_tool_error))
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", tools_condition)
     graph.add_edge("tools", "agent")

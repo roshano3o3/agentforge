@@ -1,0 +1,29 @@
+# AgentForge on Kubernetes: `kubectl apply -k deploy/k8s` (docs/kubernetes.md).
+# Images are built from this repo (they're not published to a registry); `images:` below maps each name to the
+# tag you built, e.g. `kind load docker-image agentforge/worker:local` for a kind cluster.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentforge
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: agentforge
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - config.yaml
+  - secret.yaml
+  - postgres.yaml
+  - redis.yaml
+  - api.yaml
+  - worker.yaml
+  - web.yaml
+  - seed-job.yaml
+images:
+  - name: agentforge/api
+    newTag: local
+  - name: agentforge/worker
+    newTag: local
+  - name: agentforge/web
+    newTag: local
+  - name: agentforge/seed
+    newTag: local

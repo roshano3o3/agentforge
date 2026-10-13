@@ -11,6 +11,7 @@ dependencies = [
     "langchain-core>=1.0,<2",
     "openai>=3.26,<4",
     "anthropic>=1.12,<2",
+    "mcp>=2.3,<3",
 ]
 
 [build-system]

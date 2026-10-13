@@ -26,7 +26,7 @@ planner decision that chose the call, with its args and its result or error.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool, tool
@@ -213,6 +213,7 @@ def _overridden(original: BaseTool, override: Mapping[str, Any]) -> BaseTool:
         description=original.description,
         args_schema=original.args_schema,
         response_format="content_and_artifact",
+        metadata=original.metadata,
     )
 
 
@@ -245,10 +246,24 @@ def _traced(original: BaseTool) -> BaseTool:
         description=original.description,
         args_schema=original.args_schema,
         response_format="content_and_artifact",
+        metadata=original.metadata,
     )
 
 
-def tools_for(scenario: Mapping[str, Any] | None) -> list[BaseTool]:
-    """The tool set for one case: TOOLS, with the scenario's overrides applied, each traced."""
+def tools_for(scenario: Mapping[str, Any] | None, base: Sequence[BaseTool] | None = None) -> list[BaseTool]:
+    """The tool set for one case: `base` (default TOOLS, in-process; or the MCP client's tools, mcp_client.py)
+    with the scenario's overrides applied, each traced. The same wrapping whatever the transport."""
     overrides = (scenario or {}).get("tool_overrides") or {}
-    return [_traced(_overridden(t, overrides[t.name]) if t.name in overrides else t) for t in TOOLS]
+    return [_traced(_overridden(t, overrides[t.name]) if t.name in overrides else t) for t in (base or TOOLS)]
+
+
+def base_tools(transport: str = "in-process", mcp_server: str = "") -> list[BaseTool]:
+    """TOOLS in-process, or the same tools reached over MCP (`transport="mcp"`; mcp_server "" launches the
+    bundled server over stdio, an http(s) URL uses Streamable HTTP)."""
+    if transport == "in-process":
+        return TOOLS
+    if transport == "mcp":
+        from invoice_agent.mcp_client import mcp_tools  # the MCP SDK is only imported when used
+
+        return mcp_tools(mcp_server)
+    raise ValueError(f"unknown tool transport {transport!r} (in-process or mcp)")
