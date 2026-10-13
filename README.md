@@ -34,6 +34,7 @@ flowchart LR
         PG[("Postgres<br/>runs, steps, spans,<br/>decisions: immutable")]
     end
     AGENT["Your agent<br/>SDK adapter: python or http"]
+    MCP["MCP server<br/>(the agent's tools, optional)"]
     LLM["LLM providers<br/>Anthropic, OpenAI, Ollama"]
     OTEL["OTel collector / Jaeger<br/>(optional)"]
 
@@ -43,6 +44,7 @@ flowchart LR
     API -->|"enqueue run"| Q --> W
     W -->|"one call per test case"| AGENT
     AGENT -.->|"LLM planner only"| LLM
+    AGENT -.->|"tools=mcp"| MCP
     W --> EV
     EV -->|"verdicts, scores, reasons"| PG
     W -->|"results, steps, spans"| PG
@@ -168,6 +170,31 @@ The **Trace Explorer** shows the tree as a waterfall, with the spans that failed
 
 More detail: [`docs/tracing.md`](docs/tracing.md) (span tree, redaction, measured overhead) and [`docs/replay.md`](docs/replay.md) (override contract, the 400, provenance, diff).
 
+## Agents whose tools live behind MCP servers
+
+Many agents reach their tools through [MCP](https://modelcontextprotocol.io/) servers rather than as in-process functions. An evaluation has to see the same thing either way. Otherwise moving a tool behind MCP looks like a behaviour change, and a regression in the MCP layer can't be told apart from a change in the agent.
+
+- **The tools, served over MCP.** The example agent's eight tools are also served by an MCP server, [`invoice_agent.mcp_server`](examples/invoice_agent/invoice_agent/mcp_server.py) (stdio or Streamable HTTP, the official SDK).
+- **One setting to switch.** Both the scripted and the LLM planner can reach the tools through it: run or replay with `tools=mcp`.
+- **Parity test.** It runs v1, v2, PR #4's agent and the LLM planner (fake provider) on every case of both invoice datasets, twice: in-process and over MCP (a real stdio subprocess). Over 180 case pairs, the results, trajectories, evaluator verdicts and stored span trees are identical. The only exceptions are timings and an error event's stack trace, which shows the MCP client re-raising.
+
+Details and limits: [`docs/mcp.md`](docs/mcp.md).
+
+## Deploy on Kubernetes
+
+[`deploy/k8s/`](deploy/k8s) (kustomize) runs the same stack:
+
+- **API and dashboard:** one Deployment each.
+- **Worker:** **its own Deployment**.
+- **Data:** a Postgres StatefulSet with a volume, and Redis.
+- **Seed:** the demo seed as a Job.
+
+Every container has probes and resource requests/limits, and config and keys come from a ConfigMap and a Secret.
+
+The worker is separate because it does all the heavy work: it runs the agent on every case and every evaluator. Its load grows with the queue and the agent's latency, while the API's doesn't. So `kubectl scale deployment/worker --replicas=N` adds evaluation capacity without touching the API.
+
+[`.github/workflows/k8s.yml`](.github/workflows/k8s.yml) deploys it to a kind cluster on every push. It waits for the seed Job, then checks `/health`, the seeded runs and the dashboard. Details and limits: [`docs/kubernetes.md`](docs/kubernetes.md).
+
 ## Benchmarks: real LLMs
 
 The same LangGraph agent with a model as the planner. It has the same tools, scenarios and defenses, runs through the same pipeline, and is scored by the same deterministic evaluators. Pass rates below use the fact-based `@1.1.0` answer checks (Part B's outputs re-scored with no model call). The first two models ran 3 repeats on each dataset:
@@ -222,7 +249,7 @@ Also captured: [`trajectory-v1-passing.png`](docs/screenshots/trajectory-v1-pass
 
 ## Tests
 
-**474 automated tests:** 460 Python (unit, integration against the real API and the worker's code, raw-SQL trigger tests, CLI → API → Redis → Docker worker end-to-end) and 14 Playwright browser tests. They run in CI on every push (lint, Python on Postgres and SQLite, browser).
+**484 automated tests:** 470 Python (unit, integration against the real API and the worker's code, raw-SQL trigger tests, MCP parity, CLI → API → Redis → Docker worker end-to-end) and 14 Playwright browser tests. They run in CI on every push (lint, Python on Postgres and SQLite, browser), next to the kind deployment workflow.
 
 ```powershell
 .\scripts\test.ps1             # Python on SQLite (no Docker); runs executed in-process by the worker's code
@@ -257,6 +284,7 @@ Each suite uses its own database and Redis index, never the dev ones. What each 
 
 **Tested environments.**
 - Docker Compose was exercised on one Windows machine. CI runs Linux with service containers.
+- The Kubernetes manifests were tested on kind only, in CI and locally. They have no Ingress (no auth), a single API replica and single-node Postgres and Redis ([`docs/kubernetes.md`](docs/kubernetes.md#limits)).
 - Purging production data would need an audited admin command; the dev cleanup bypassed the immutability triggers by hand.
 
 The full list: [`docs/limitations.md`](docs/limitations.md).
@@ -268,13 +296,15 @@ Done:
 - The LLM benchmarks, Parts A–D.
 - Phase 8 part A: this README, the demo seed, screenshots and the GIF.
 
+- Phase 8 part B: Kubernetes manifests with a kind CI deployment, and the MCP adapter with a parity test.
+
 Next (not started, not claimed):
-- Kubernetes manifests.
-- An MCP adapter.
+- Authentication. It comes before any shared deployment or an Ingress.
 - A reusable GitHub Action instead of [`scripts/ci-gate.sh`](scripts/ci-gate.sh).
 - Validating `answer_grounded` on fresh real outputs.
 - The OpenAI models in the benchmark.
-- Authentication.
+- An MCP adapter for any agent's own server: the client is generic, but only the example's server is tested.
+- API migrations as a Kubernetes Job, so the API can scale out.
 
 ## License
 

@@ -94,7 +94,10 @@ def _tools(settings: Mapping[str, Any] | None) -> Any:
 
 
 def _run(
-    behavior: Behavior, input_text: str, scenario: Mapping[str, Any] | None, overrides: Mapping[str, Any] | None
+    behavior: Behavior,
+    input_text: str,
+    scenario: Mapping[str, Any] | None,
+    overrides: Mapping[str, Any] | None = None,
 ) -> AdapterOutput:
     tools = _tools(overrides)
     graph = _graph(behavior) if scenario is None and tools is None else build_graph(behavior, scenario, tools)
