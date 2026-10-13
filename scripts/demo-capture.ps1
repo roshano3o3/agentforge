@@ -15,7 +15,8 @@ param(
     [string]$WebUrl = "http://127.0.0.1:3000",
     [string]$ApiUrl = "http://127.0.0.1:8000",
     [int]$Fps = 8,
-    [int]$Width = 960
+    [int]$Width = 960,
+    [int]$Colors = 64   # 256 gave 11.8 MB for a 27 s clip; 64 keeps it under 10 MB and the text readable
 )
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -36,7 +37,7 @@ try {
 }
 
 # Two-pass palette: one palette for the whole clip (the UI is mostly flat colour), frames diffed against it.
-$filter = "fps=$Fps,scale=${Width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+$filter = "fps=$Fps,scale=${Width}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=${Colors}:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
 $ErrorActionPreference = "Continue"
 if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
     ffmpeg -y -loglevel error -i $Video -vf $filter -loop 0 $Gif
