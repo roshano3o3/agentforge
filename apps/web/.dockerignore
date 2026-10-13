@@ -5,3 +5,4 @@ playwright-report
 e2e
 demo
 tsconfig.tsbuildinfo
+playwright.config.ts
