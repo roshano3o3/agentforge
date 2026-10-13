@@ -1,5 +1,5 @@
 """AgentForge CLI: dataset publish/validate, adversarial generate, evaluate,
-runs list/show, baseline set/show, compare (two runs, or several models), gate, replay, rescore.
+runs list/show, baseline set/show, compare (two runs, or several models), gate, replay, rescore, demo seed.
 
 `evaluate` does not execute anything locally: it submits a run to the API,
 which queues it for the worker (Docker), then polls until the run is
@@ -36,7 +36,7 @@ if sys.platform == "win32":
 import yaml
 from pydantic import ValidationError
 
-from agentforge_cli import adversarial, benchmark
+from agentforge_cli import adversarial, benchmark, demo
 from agentforge_cli.dataset_io import DatasetFileError, validate_dataset_file
 from agentforge_cli.git_utils import current_commit_sha
 from agentforge_cli.release_io import (
@@ -62,6 +62,8 @@ adversarial_app = typer.Typer(add_completion=False, help="Adversarial (safety) t
 app.add_typer(runs_app, name="runs")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(adversarial_app, name="adversarial")
+demo_app = typer.Typer(add_completion=False, help="The demo data: `agentforge demo seed`.")
+app.add_typer(demo_app, name="demo")
 
 console = Console()
 
@@ -1014,6 +1016,36 @@ def gate(
     print(verdict_line(decision["passed"]))
     if not decision["passed"]:
         raise typer.Exit(code=1)
+
+
+@demo_app.command("seed")
+def demo_seed(
+    root: Path = typer.Option(
+        Path("."), "--root", help="Repository root: its datasets/ and agentforge.yaml are what gets loaded."
+    ),
+    wait_for: float = typer.Option(60.0, "--wait-for-api", help="Seconds to wait for the API to come up."),
+    run_timeout: float = typer.Option(300.0, "--run-timeout", help="Seconds to wait for each run or replay."),
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+) -> None:
+    """Load the demo into an EMPTY database: the datasets, a production baseline (v1), the v1/v2 and demo PR #4
+    runs with their release decisions, and one replay of PR #4's failing injection case with D2 on.
+
+    Everything goes through the API and the worker (fixture-based: the example agents are scripted). A database
+    that already has applications or runs is left untouched (exit 0). Exit code 1 if seeding failed.
+    """
+    with AgentForgeClient(base_url=api_url, timeout=60.0) as client:
+        try:
+            demo.wait_for_api(client, wait_for)
+            if not demo.is_empty(client):
+                console.print("The database already has data; the demo seed loads only into an empty one.")
+                return
+            console.print(f"Seeding the demo from {root.resolve()} through {api_url}")
+            demo.seed(client, root, lambda line: console.print(f"  {escape(line)}"), run_timeout=run_timeout)
+        except Exception as exc:  # noqa: BLE001 - surface any API/worker error to the user
+            console.print(f"[red]Demo seed failed:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1) from None
+    console.print("[green]Demo seeded.[/green] Open http://127.0.0.1:3000/runs")
+    console.print("fixture-based: the example agents are scripted (no model); every result is real worker output.")
 
 
 if __name__ == "__main__":

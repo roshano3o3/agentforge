@@ -6,7 +6,8 @@ import { API_PORT } from "./ports";
 import { PYTHON, REPO_ROOT } from "./env";
 
 const API_URL = `http://127.0.0.1:${API_PORT}`;
-const SCREENSHOT_DIR = path.join(REPO_ROOT, "docs", "screenshots");
+// Evidence of the run, not docs: docs/screenshots/ comes from the seeded demo (demo/capture.spec.ts).
+const SCREENSHOT_DIR = path.join(__dirname, "..", "test-results", "screenshots");
 const APP_NAME = "ui-run-app";
 
 test.beforeAll(async ({ request }) => {

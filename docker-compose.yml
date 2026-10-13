@@ -48,6 +48,11 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,6 +93,33 @@ services:
       redis:
         condition: service_healthy
       api:
+        condition: service_healthy
+
+  # The dashboard (production build). The browser calls the API at 127.0.0.1:8000, so both ports are
+  # published on localhost only. For development, `scripts/dev-web.ps1` runs `next dev` on the same port
+  # instead: stop this container first (`docker compose stop web`).
+  web:
+    build:
+      context: apps/web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # One-shot: `agentforge demo seed` loads the demo (datasets, v1 baseline, v1/v2 and demo PR #4 runs with
+  # their release decisions, one replay) through the API, executed by the worker. Only into an EMPTY
+  # database: on later `docker compose up`s it finds data, does nothing and exits 0.
+  seed:
+    build:
+      context: .
+      dockerfile: cli/Dockerfile
+    restart: "no"
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
         condition: service_started
 
   # Optional trace viewer, off by default: `docker compose --profile tracing up -d`
